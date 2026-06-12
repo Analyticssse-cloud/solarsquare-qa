@@ -1,94 +1,107 @@
-# Deploy the QA Dashboard on Vercel (free, no credit card)
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SolarSquare Quality Systems</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* ============ DESIGN TOKENS ============ */
+  :root {
+    --accent-h: 248;
+    --primary: oklch(0.55 0.17 var(--accent-h));
+    --primary-strong: oklch(0.47 0.18 var(--accent-h));
+    --primary-soft: oklch(0.95 0.04 var(--accent-h));
+    --primary-softer: oklch(0.975 0.02 var(--accent-h));
+    --sun: oklch(0.78 0.15 70);
+    --sun-soft: oklch(0.95 0.06 75);
 
-This is the **Vercel** build of the dashboard. It's the same app as the Netlify version —
-React + Vite frontend, plus a serverless API that reads/writes your Google Sheet — but the
-backend functions live in **`/api`** (Vercel's format) instead of `netlify/functions`.
+    --ok: oklch(0.62 0.15 155);
+    --ok-soft: oklch(0.95 0.06 155);
+    --bad: oklch(0.62 0.20 25);
+    --bad-soft: oklch(0.95 0.06 25);
+    --warn: oklch(0.78 0.15 70);
+    --warn-soft: oklch(0.95 0.07 75);
 
-> Use **this** folder for Vercel. Ignore the Netlify-specific "Deploy on Netlify" section in
-> `README.md`; everything else there (Google Cloud service account, the Sheet tabs, the auth
-> gate) still applies exactly the same.
+    --bg: oklch(0.975 0.004 250);
+    --surface: oklch(1 0 0);
+    --surface-2: oklch(0.985 0.003 250);
+    --line: oklch(0.91 0.006 250);
+    --line-soft: oklch(0.945 0.005 250);
 
-Vercel's **Hobby** plan is free forever and needs no credit card. It runs both the static site
-and the `/api/*` serverless functions.
+    --ink: oklch(0.27 0.02 260);
+    --ink-2: oklch(0.45 0.02 260);
+    --ink-3: oklch(0.62 0.015 260);
+    --ink-on: oklch(0.99 0 0);
 
----
+    --radius: 14px;
+    --radius-sm: 10px;
+    --radius-lg: 20px;
+    --shadow-sm: 0 1px 2px oklch(0.4 0.03 260 / 0.05), 0 1px 3px oklch(0.4 0.03 260 / 0.04);
+    --shadow-md: 0 2px 4px oklch(0.4 0.03 260 / 0.04), 0 6px 16px oklch(0.4 0.03 260 / 0.07);
+    --shadow-lg: 0 8px 30px oklch(0.4 0.03 260 / 0.12);
 
-## What changed vs. the Netlify version
-| | Netlify | Vercel (this folder) |
-|---|---|---|
-| Backend functions | `netlify/functions/*.js` | `api/*.js` |
-| Handler format | `exports.handler = (event) => {...}` | same code + a tiny `api/_adapter.js` wrapper |
-| Config file | `netlify.toml` | `vercel.json` |
-| API URL | `/api/*` (via redirect) | `/api/*` (native — file = route) |
+    --pad-card: 24px;
+    --row-h: 52px;
+    --gap: 18px;
 
-The function **logic is identical**. `api/_adapter.js` converts Vercel's `(req, res)` into the
-`event` object the ported handlers expect, so nothing else had to be rewritten. Files in `/api`
-that start with `_` (`_adapter.js`, `_sheets.js`, `_auth.js`) are private helpers, not routes.
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-ui: 'Plus Jakarta Sans', sans-serif;
+    --font-mono: 'Space Mono', monospace;
+  }
 
----
+  [data-density="compact"] { --pad-card: 16px; --row-h: 42px; --gap: 12px; }
+  [data-density="comfy"]   { --pad-card: 30px; --row-h: 62px; --gap: 24px; }
 
-## One-time setup (5 minutes, all in the browser)
+  [data-theme="dark"] {
+    --bg: oklch(0.21 0.015 260);
+    --surface: oklch(0.255 0.016 260);
+    --surface-2: oklch(0.235 0.015 260);
+    --line: oklch(0.33 0.018 260);
+    --line-soft: oklch(0.30 0.016 260);
+    --ink: oklch(0.96 0.005 260);
+    --ink-2: oklch(0.78 0.01 260);
+    --ink-3: oklch(0.62 0.012 260);
+    --primary: oklch(0.68 0.14 var(--accent-h));
+    --primary-strong: oklch(0.6 0.16 var(--accent-h));
+    --primary-soft: oklch(0.33 0.06 var(--accent-h));
+    --primary-softer: oklch(0.29 0.035 var(--accent-h));
+    --ok-soft: oklch(0.33 0.05 155);
+    --bad-soft: oklch(0.34 0.06 25);
+    --warn-soft: oklch(0.36 0.06 75);
+    --sun-soft: oklch(0.37 0.06 75);
+    --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
+    --shadow-md: 0 2px 4px oklch(0 0 0 / 0.25), 0 8px 20px oklch(0 0 0 / 0.35);
+    --shadow-lg: 0 10px 36px oklch(0 0 0 / 0.5);
+  }
 
-### 1. Get the code onto GitHub
-You need this `vercel-app` folder in a GitHub repo (Vercel deploys from GitHub). If you don't
-have Git installed, the easiest path:
-1. Create a new repo at **github.com/new** (e.g. `qa-dashboard-vercel`), keep it **Private**.
-2. On the new repo page, click **uploading an existing file**.
-3. Drag in the contents of this `vercel-app` folder (or upload the zip's extracted files,
-   keeping the folder structure: `api/`, `src/`, `index.html`, `package.json`, `vercel.json`,
-   etc.). **Do not** upload `node_modules` or any `.env` file.
-4. Commit.
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    transition: background 0.35s ease, color 0.35s ease;
+  }
+  #root { height: 100%; }
+  ::selection { background: var(--primary-soft); }
 
-### 2. Import into Vercel
-1. Go to **vercel.com**, sign in **with GitHub** (free, no card).
-2. **Add New… → Project → Import** your `qa-dashboard-vercel` repo.
-3. Framework preset auto-detects **Vite**, which sets Build Command `npm run build` and Output
-   Directory `dist` automatically. Leave them as detected. (Functions in `/api` are also
-   auto-detected — no config file needed.)
-4. **Before clicking Deploy**, open **Environment Variables** and add all of these (same
-   values as your Netlify `.env` — see `.env.example`):
-   - `SHEET_ID`
-   - `GOOGLE_SA_EMAIL`
-   - `GOOGLE_SA_KEY`  *(paste the whole key incl. the `\n` sequences, in quotes)*
-   - `ALLOWED_DOMAIN`  → `solarsquare.in`
-   - `ALLOWED_EMAILS`  *(your admin allowlist, or blank for anyone on the domain)*
-   - `VITE_GOOGLE_CLIENT_ID`
-   - `VITE_ALLOWED_DOMAIN`  → `solarsquare.in`
-   - `VITE_ALLOWED_EMAILS`
-   - *(optional)* `GMAIL_SENDER` if you wired report emails
-5. Click **Deploy**. You'll get a URL like `https://qa-dashboard-vercel.vercel.app`.
+  *::-webkit-scrollbar { width: 11px; height: 11px; }
+  *::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; border: 3px solid var(--bg); }
+  *::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
 
-### 3. Allow the new URL to sign in with Google
-In **Google Cloud → APIs & Services → Credentials →** your OAuth **Web** client →
-**Authorized JavaScript origins**, add your Vercel URL:
-- `https://qa-dashboard-vercel.vercel.app`
-(and your custom domain later, if you add one). Save.
-
-### 4. Verify
-- Open `https://<your-app>.vercel.app/api/config` → should show `{"enabled":true, ...}`.
-- Open `https://<your-app>.vercel.app/api/meetings` (signed in) → each row should now include
-  **`meetingStatus`**, **`meetingDoneDate`**, and **`meetingDoneISO`** — confirming the new
-  *Meeting Done Date* support is live.
-- Open the app URL, sign in, and the dashboard loads against your real Sheet.
-
----
-
-## Updating it later
-Every push to the GitHub repo's main branch auto-deploys. To change an environment variable,
-edit it in **Vercel → Project → Settings → Environment Variables**, then **redeploy**
-(Deployments → ⋯ → Redeploy) so the build picks up any `VITE_*` change.
-
-## Local dev (optional)
-```bash
-npm install
-npm i -g vercel      # the Vercel CLI
-vercel dev           # serves the UI AND /api/* together on http://localhost:3000
-```
-Plain `npm run dev` runs the frontend only (uses built-in mock data if the API isn't running).
-
-## Notes
-- **Free tier limits** (Hobby): generous for an internal tool — 100 GB bandwidth/month and
-  plenty of function invocations. No card required.
-- **Function size:** `googleapis` is bundled into each `/api` function; well within Vercel's
-  limits.
-- **Secrets:** never commit `.env`. `.gitignore` already excludes it.
+  h1,h2,h3,h4 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  button { font-family: inherit; cursor: pointer; }
+  input, select, textarea { font-family: inherit; }
+  .tnum { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./src/main.jsx"></script>
+</body>
+</html>
