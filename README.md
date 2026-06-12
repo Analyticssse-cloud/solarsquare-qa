@@ -42,8 +42,9 @@ have Git installed, the easiest path:
 ### 2. Import into Vercel
 1. Go to **vercel.com**, sign in **with GitHub** (free, no card).
 2. **Add New… → Project → Import** your `qa-dashboard-vercel` repo.
-3. Framework preset auto-detects **Vite**. Leave Build Command `npm run build` and Output
-   Directory `dist` (already set by `vercel.json`).
+3. Framework preset auto-detects **Vite**, which sets Build Command `npm run build` and Output
+   Directory `dist` automatically. Leave them as detected. (Functions in `/api` are also
+   auto-detected — no config file needed.)
 4. **Before clicking Deploy**, open **Environment Variables** and add all of these (same
    values as your Netlify `.env` — see `.env.example`):
    - `SHEET_ID`

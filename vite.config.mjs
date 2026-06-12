@@ -1,311 +1,251 @@
-// summary.jsx — City & TL audit summary (the manager landing view). window.SummaryView
-const { useState: useStateSm, useMemo: useMemoSm } = React;
+// performance.jsx — individual LRM scorecard. window.PerformanceView
+const { useState: useStateP, useMemo: useMemoP } = React;
 
-const APPROVED_SET = ['Confirmed', 'Completed'];
-const REJECTED_SET = ['Rescheduled', 'Dropped', 'No-show', 'Rejected'];
-const SUMMARY_TODAY = '2026-06-08';
-// A meeting is "due" (should have happened) once it has a resolved outcome OR its date has passed.
-const RESOLVED_MEETING = ['Completed', 'No-show', 'Rescheduled', 'Cancelled', 'Dropped'];
+const STATUS_TONES = {
+  Completed: 'ok', Confirmed: 'ok',
+  Scheduled: 'primary', Pending: 'neutral',
+  Rescheduled: 'warn',
+  'No-show': 'bad', Dropped: 'bad',
+};
+function statusTone(s) { return STATUS_TONES[s] || 'neutral'; }
 
-// blank accumulator for a city / TL roll-up bucket
-function blankAgg() {
-  return { totalMS: 0, due: 0, held: 0, auditsDone: 0, pending: 0, approved: 0, rejected: 0, scoreSum: 0, scoreCount: 0 };
-}
-// `meeting` = the tracker row; `audit` = its matching QA audit (or null).
-function addToAgg(agg, audit, meeting) {
-  agg.totalMS++;
-  // meeting outcome — a meeting counts toward "due" once it has a resolved status or its date passed
-  if (meeting) {
-    const st = meeting.meetingStatus || '';
-    const iso = meeting.scheduleISO || (meeting.scheduleDate || '').slice(0, 10);
-    const isDue = RESOLVED_MEETING.indexOf(st) >= 0 || (iso && iso <= SUMMARY_TODAY);
-    if (isDue) {
-      agg.due++;
-      if (st === 'Completed') agg.held++;
-    }
-  }
-  if (audit) {
-    agg.auditsDone++;
-    agg.scoreSum += audit.overall; agg.scoreCount++;
-    if (APPROVED_SET.indexOf(audit.meetingStatusAfterAudit) >= 0) agg.approved++;
-    else if (REJECTED_SET.indexOf(audit.meetingStatusAfterAudit) >= 0) agg.rejected++;
-  } else {
-    agg.pending++;
-  }
-}
-function aggScore(agg) { return agg.scoreCount ? Math.round(agg.scoreSum / agg.scoreCount) : null; }
-function aggDoneRate(agg) { return agg.due ? Math.round((agg.held / agg.due) * 100) : null; }
-function doneTone(rate) { return rate == null ? 'neutral' : (rate >= 75 ? 'ok' : rate >= 55 ? 'warn' : 'bad'); }
-
-// Meetings-Done cell: held count over the meetings that were due, with the done-rate.
-function DoneCell({ held, due, strong }) {
-  const rate = due ? Math.round((held / due) * 100) : null;
-  const tone = doneTone(rate);
-  const col = tone === 'neutral' ? 'var(--ink-3)' : `var(--${tone})`;
-  return (
-    <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15, gap: 1 }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: strong ? 700 : 600, fontSize: strong ? 14 : 13.5, color: held === 0 ? 'var(--ink-3)' : col }}>
-          {held}<span style={{ color: 'var(--ink-3)', fontWeight: 500 }}>/{due || 0}</span>
-        </span>
-        <span style={{ fontSize: 10.5, fontWeight: 700, color: col }}>{rate == null ? '—' : rate + '%'}</span>
-      </div>
-    </td>
-  );
-}
-
-// ---- CSV export of the summary (one row per TL, plus city subtotals) ----
-function exportSummaryCSV(cities, grand) {
-  const head = ['City', 'Team Lead', 'Total MS', 'Meetings Done', 'Due', 'Done %', 'Audits Done', 'Pending', 'Meeting Approved', 'Meetings Rejected', 'Meeting Score'];
-  const lines = [head.join(',')];
-  const cell = v => (v == null ? '' : '"' + String(v).replace(/"/g, '""') + '"');
-  cities.forEach(c => {
-    c.tls.forEach(t => lines.push([cell(c.city), cell(t.tlName), t.totalMS, t.held, t.due, aggDoneRate(t) == null ? '' : aggDoneRate(t), t.auditsDone, t.pending, t.approved, t.rejected, aggScore(t) == null ? '' : aggScore(t)].join(',')));
-    lines.push([cell(c.city), cell('— City total —'), c.totalMS, c.held, c.due, aggDoneRate(c) == null ? '' : aggDoneRate(c), c.auditsDone, c.pending, c.approved, c.rejected, aggScore(c) == null ? '' : aggScore(c)].join(','));
-  });
-  lines.push([cell('ALL CITIES'), cell('Grand total'), grand.totalMS, grand.held, grand.due, aggDoneRate(grand) == null ? '' : aggDoneRate(grand), grand.auditsDone, grand.pending, grand.approved, grand.rejected, aggScore(grand) == null ? '' : aggScore(grand)].join(','));
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'city-tl-summary.csv';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
-
-// small numeric cell
-function NumCell({ value, tone, strong }) {
-  const col = tone ? `var(--${tone})` : 'var(--ink)';
-  return (
-    <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center', fontFamily: 'var(--font-mono)', fontWeight: strong ? 700 : 600, fontSize: strong ? 14 : 13.5, color: value === 0 && !strong ? 'var(--ink-3)' : col }}>
-      {value == null ? '—' : value}
-    </td>
-  );
-}
-
-function SummaryView({ audits, meetings, threshold }) {
-  const { fmtDate, cityForTl, AGENTS } = window.QA;
-  const todayISO = '2026-06-08';
-  const [f, setF] = useStateSm({ city: '', tl: '', type: '', from: '', to: '' });
+function PerformanceView({ audits, threshold, agents }) {
+  const { SECTIONS, fmtDate } = window.QA;
+  const [sel, setSel] = useStateP(agents[0]?.name || '');
+  const [f, setF] = useStateP({ mgr: '', tl: '', auditor: '', from: '', to: '' });
   const set = (k, v) => setF(o => ({ ...o, [k]: v }));
-  const [expanded, setExpanded] = useStateSm({}); // city -> bool (undefined = open)
-  const isOpen = c => expanded[c] !== false;
-  const toggle = c => setExpanded(o => ({ ...o, [c]: !isOpen(c) }));
+  const reset = () => setF({ mgr: '', tl: '', auditor: '', from: '', to: '' });
+  const todayISO = new Date().toISOString().slice(0, 10);
 
-  // LRM email -> employee (normalized key so case/whitespace differences still match)
-  const empByEmail = useMemoSm(() => {
-    const m = {}; AGENTS.forEach(a => { if (a.email) m[String(a.email).trim().toLowerCase()] = a; }); return m;
-  }, [AGENTS]);
-
-  // Resolve a meeting's Team Lead. The backend (meetings.js) already joins each LRM to its
-  // TL with a normalized match and returns it as assignedAuditorName/Email (TL = auditor),
-  // so trust that first; fall back to a normalized client-side lookup; else Unassigned.
-  const resolveTL = React.useCallback((m) => {
-    if (m.assignedAuditorName || m.assignedAuditorEmail) {
-      return { tlName: m.assignedAuditorName || window.QA.nameFromEmail(m.assignedAuditorEmail), tlEmail: m.assignedAuditorEmail || '' };
-    }
-    const emp = empByEmail[String(m.lrmEmail || '').trim().toLowerCase()];
-    if (emp && (emp.tlName || emp.tlEmail)) return { tlName: emp.tlName || window.QA.nameFromEmail(emp.tlEmail), tlEmail: emp.tlEmail || '' };
-    return { tlName: 'Unassigned', tlEmail: '' };
-  }, [empByEmail]);
-
-  // leadId -> audit (most recent wins; audits already sorted desc by ts)
-  const auditByLead = useMemoSm(() => {
+  // ZSM / Team Lead options derived from the REAL employee list (not the sample roster)
+  const managers = useMemoP(() => {
     const m = {};
-    audits.forEach(a => { if (a.leadId != null && m[a.leadId] == null) m[a.leadId] = a; });
-    return m;
+    agents.forEach(a => { if (a.mgrEmail) m[a.mgrEmail] = a.mgrName || a.mgrEmail; });
+    return Object.entries(m).map(([email, name]) => ({ email, name })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, [agents]);
+  const teamLeads = useMemoP(() => {
+    const m = {};
+    agents.forEach(a => { if (a.tlEmail && (!f.mgr || a.mgrEmail === f.mgr)) m[a.tlEmail] = a.tlName || a.tlEmail; });
+    return Object.entries(m).map(([email, name]) => ({ email, name })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, [agents, f.mgr]);
+
+  // LRM picker options narrow by ZSM / Team Lead
+  const agentOpts = useMemoP(() => agents.filter(a =>
+    (!f.mgr || a.mgrEmail === f.mgr) && (!f.tl || a.tlEmail === f.tl)), [agents, f.mgr, f.tl]);
+
+  // keep the selected LRM valid when ZSM/TL filters change
+  React.useEffect(() => {
+    if (agentOpts.length && !agentOpts.some(a => a.name === sel)) setSel(agentOpts[0].name);
+  }, [agentOpts]);
+
+  // distinct auditors for the Auditor filter
+  const auditors = useMemoP(() => {
+    const m = {};
+    audits.forEach(a => { if (a.auditorEmail) m[a.auditorEmail] = a.auditorName || a.auditorEmail; });
+    return Object.entries(m).map(([email, name]) => ({ email, name }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }, [audits]);
 
-  // option lists
-  const cityOpts = useMemoSm(() => Array.from(new Set(meetings.map(m => m.city))).filter(Boolean).sort(), [meetings]);
-  const tlOpts = useMemoSm(() => {
-    const m = {};
-    meetings.forEach(mt => {
-      const { tlName, tlEmail } = resolveTL(mt);
-      const key = tlEmail || tlName;
-      if (key && (!f.city || mt.city === f.city)) m[key] = tlName;
-    });
-    return Object.entries(m).map(([email, name]) => ({ email, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [meetings, resolveTL, f.city]);
-  const typeOpts = useMemoSm(() => Array.from(new Set(meetings.map(m => m.meetingType))).filter(Boolean).sort(), [meetings]);
+  const group = useMemoP(() => audits.filter(a =>
+    a.agentName === sel
+    && (!f.auditor || a.auditorEmail === f.auditor)
+    && (!f.from || a.callDate >= f.from)
+    && (!f.to || a.callDate <= f.to)
+  ).sort((a, b) => b.ts - a.ts), [audits, sel, f.auditor, f.from, f.to]);
+  const completed = group;
+  const agent = agents.find(a => a.name === sel);
 
-  // filtered meeting rows
-  const rows = useMemoSm(() => meetings.filter(m => {
-    if (f.city && m.city !== f.city) return false;
-    if (f.type && m.meetingType !== f.type) return false;
-    if (f.tl) { const { tlEmail, tlName } = resolveTL(m); if ((tlEmail || tlName) !== f.tl) return false; }
-    if (f.from && m.scheduleISO < f.from) return false;
-    if (f.to && m.scheduleISO > f.to) return false;
-    return true;
-  }), [meetings, f, resolveTL]);
+  const meetingStats = useMemoP(() => ({
+    approved: group.filter(a => ['Confirmed', 'Completed'].indexOf(a.meetingStatusAfterAudit) >= 0).length,
+    rejected: group.filter(a => ['Rescheduled', 'Dropped', 'No-show', 'Rejected'].indexOf(a.meetingStatusAfterAudit) >= 0).length,
+  }), [group]);
 
-  // roll up: City -> TL
-  const { cities, grand } = useMemoSm(() => {
-    const cityMap = {};
-    const grand = blankAgg();
-    rows.forEach(m => {
-      const { tlName, tlEmail } = resolveTL(m);
-      const audit = auditByLead[m.leadId] || null;
-      const city = m.city || 'Unassigned';
-      const c = cityMap[city] || (cityMap[city] = { city, tls: {}, ...blankAgg() });
-      const t = c.tls[tlEmail || tlName] || (c.tls[tlEmail || tlName] = { tlName, tlEmail, ...blankAgg() });
-      addToAgg(t, audit, m); addToAgg(c, audit, m); addToAgg(grand, audit, m);
-    });
-    const cities = Object.values(cityMap).map(c => ({
-      ...c, tls: Object.values(c.tls).sort((a, b) => b.pending - a.pending || b.totalMS - a.totalMS),
-    })).sort((a, b) => b.totalMS - a.totalMS);
-    return { cities, grand };
-  }, [rows, resolveTL, auditByLead]);
-
-  const coverage = grand.totalMS ? Math.round((grand.auditsDone / grand.totalMS) * 100) : 0;
-  const doneRate = aggDoneRate(grand);
-
-  const quickRange = (kind) => {
-    if (kind === 'all') return setF(o => ({ ...o, from: '', to: '' }));
-    const t = new Date(todayISO + 'T00:00:00');
-    let from = new Date(t);
-    if (kind === 'week') from.setDate(t.getDate() - 6);
-    if (kind === 'month') from.setDate(t.getDate() - 29);
-    setF(o => ({ ...o, from: from.toISOString().slice(0, 10), to: todayISO }));
+  const exportPDF = () => {
+    const bits = ['LRM: ' + sel];
+    const au = auditors.find(x => x.email === f.auditor); if (au) bits.push('Auditor: ' + au.name);
+    if (f.from || f.to) bits.push('Dates: ' + (f.from || '\u2026') + ' \u2192 ' + (f.to || '\u2026'));
+    window.exportAuditsPDF(group, { title: sel + ' \u2014 QA Scorecard', subtitle: bits.join('  \u00b7  ') });
   };
 
-  const Th = ({ children, w }) => <th style={{ ...window.thStyle, textAlign: 'center', width: w }}>{children}</th>;
+  const stats = useMemoP(() => {
+    if (!completed.length) return null;
+    const avg = Math.round(completed.reduce((s, a) => s + a.overall, 0) / completed.length);
+    const passed = completed.filter(a => a.overall >= threshold).length;
+    const secAvg = SECTIONS.map(s => {
+      const vals = completed.map(a => a.sectionPct[s.key]).filter(v => v != null);
+      return vals.length ? Math.round(vals.reduce((x, y) => x + y, 0) / vals.length) : null;
+    });
+    const trend = completed.slice().sort((a, b) => a.ts - b.ts).map(a => a.overall);
+    const best = secAvg.reduce((b, v, i) => (v != null && (b.v == null || v > b.v)) ? { i, v } : b, { i: 0, v: null });
+    const worst = secAvg.reduce((w, v, i) => (v != null && (w.v == null || v < w.v)) ? { i, v } : w, { i: 0, v: null });
+    return { avg, passed, secAvg, trend, best, worst };
+  }, [completed, threshold]);
 
   return (
     <div>
-      <ViewHeader title="City & TL Summary"
-        sub="Audit coverage across every scheduled meeting — by city and team lead. Pending = meetings still waiting for a QA audit."
-        action={<div style={{ display: 'flex', gap: 10 }}>
-          <Button variant="ghost" size="sm" onClick={() => exportSummaryCSV(cities, grand)} disabled={!rows.length} style={{ opacity: rows.length ? 1 : 0.5 }}>↓ Export CSV</Button>
-        </div>} />
+      <ViewHeader title="My Performance"
+        sub="An agent's full quality history — section strengths, gaps and every audit on record."
+        action={<Button size="sm" onClick={exportPDF} disabled={!group.length} style={{ opacity: group.length ? 1 : 0.5 }}>↓ Export PDF ({group.length})</Button>}
+      />
 
-      {/* KPI band */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }} className="kpi-grid">
-        <StatCard label="Total MS" value={grand.totalMS} tone="primary" sub="meetings scheduled" />
-        <StatCard label="Meetings Done" value={grand.held} tone={doneTone(doneRate) === 'neutral' ? 'primary' : doneTone(doneRate)} sub={doneRate == null ? '—' : `${doneRate}% of ${grand.due} due`} />
-        <StatCard label="Audits Done" value={grand.auditsDone} tone="ok" sub={grand.totalMS ? coverage + '% coverage' : '—'} />
-        <StatCard label="Pending" value={grand.pending} tone={grand.pending ? 'warn' : 'ok'} sub="awaiting audit" />
-        <StatCard label="Avg meeting score" value={aggScore(grand) == null ? '—' : aggScore(grand) + '%'} tone={aggScore(grand) == null ? 'neutral' : (aggScore(grand) >= threshold ? 'ok' : 'warn')} sub={`approved ${grand.approved} · rejected ${grand.rejected}`} />
-      </div>
-
-      {/* filters */}
-      <Card title="Filters" style={{ marginBottom: 'var(--gap)' }}
-        action={<div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {[['week', 'This week'], ['month', 'This month'], ['all', 'All time']].map(([k, lbl]) =>
-            <button key={k} type="button" onClick={() => quickRange(k)} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', background: 'none', border: 'none' }}>{lbl}</button>)}
-          <button type="button" onClick={() => setF({ city: '', tl: '', type: '', from: '', to: '' })} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--primary-strong)', background: 'none', border: 'none' }}>Reset</button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
+        <Card title="Filters" action={<div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <button type="button" onClick={() => setF(o => ({ ...o, from: todayISO, to: todayISO }))} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', background: 'none', border: 'none' }}>Today</button>
+          <button type="button" onClick={reset} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--primary-strong)', background: 'none', border: 'none' }}>Reset all</button>
         </div>}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }} className="filter-grid">
-          <Field label="City">
-            <Select value={f.city} onChange={v => setF(o => ({ ...o, city: v, tl: '' }))}>
-              <option value="">All cities</option>
-              {cityOpts.map(c => <option key={c} value={c}>{c}</option>)}
-            </Select>
-          </Field>
-          <Field label="Team Lead">
-            <Select value={f.tl} onChange={v => set('tl', v)}>
-              <option value="">All TLs</option>
-              {tlOpts.map(t => <option key={t.email} value={t.email}>{t.name}</option>)}
-            </Select>
-          </Field>
-          <Field label="Meeting type">
-            <Select value={f.type} onChange={v => set('type', v)}>
-              <option value="">All types</option>
-              {typeOpts.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-            </Select>
-          </Field>
-          <Field label="From"><TextInput type="date" value={f.from} onChange={v => set('from', v)} /></Field>
-          <Field label="To"><TextInput type="date" value={f.to} onChange={v => set('to', v)} /></Field>
-        </div>
-      </Card>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }} className="filter-grid">
+            <Field label="LRM">
+              <Select value={sel} onChange={setSel}>
+                {agentOpts.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="ZSM">
+              <Select value={f.mgr} onChange={v => setF(o => ({ ...o, mgr: v, tl: '' }))}>
+                <option value="">All ZSMs</option>
+                {managers.map(m => <option key={m.email} value={m.email}>{m.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="Team Lead">
+              <Select value={f.tl} onChange={v => set('tl', v)}>
+                <option value="">All TLs</option>
+                {teamLeads.map(t => <option key={t.email} value={t.email}>{t.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="Auditor">
+              <Select value={f.auditor} onChange={v => set('auditor', v)}>
+                <option value="">All auditors</option>
+                {auditors.map(a => <option key={a.email} value={a.email}>{a.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="From"><TextInput type="date" value={f.from} onChange={v => set('from', v)} /></Field>
+            <Field label="To"><TextInput type="date" value={f.to} onChange={v => set('to', v)} /></Field>
+          </div>
+        </Card>
 
-      {/* summary table */}
-      <Card title="City & Team Lead breakdown" subtitle="Click a city to expand its team leads. Sorted by volume; TLs by pending backlog." pad={false}>
-        {cities.length ? (
-          <div style={{ overflowX: 'auto' }}>
-            <Table>
-              <thead><tr>
-                <th style={{ ...window.thStyle, left: 0 }}>City / Team Lead</th>
-                <Th>Total MS</Th><Th>Meetings Done</Th><Th>Audits Done</Th><Th>Pending</Th>
-                <Th>Approved</Th><Th>Rejected</Th><Th>Meeting Score</Th>
-              </tr></thead>
-              <tbody>
-                {cities.map(c => {
-                  const open = isOpen(c.city);
-                  const cScore = aggScore(c);
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--gap)' }} className="kpi-grid">
+          <StatCard label="Audits done so far" value={group.length} tone="primary" sub={sel || '—'} />
+          <StatCard label="Meetings approved" value={meetingStats.approved} tone="ok" sub="confirmed / completed" />
+          <StatCard label="Meetings rejected" value={meetingStats.rejected} tone="bad" sub="rescheduled / dropped / no-show" />
+        </div>
+
+      {!stats ? (
+        <Card><EmptyState title="No audits for this selection" body="Adjust the filters above or pick another LRM." /></Card>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
+          {/* profile header */}
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+              <Avatar name={agent.name} size={62} />
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <h2 style={{ fontSize: 22, color: 'var(--ink)' }}>{agent.name}</h2>
+                <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 4 }}>{agent.email}</div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                  <Badge tone="neutral">TL · {agent.tlName}</Badge>
+                  <Badge tone="neutral">ZSM · {agent.mgrName}</Badge>
+                  <Badge tone="neutral">ADOS · {agent.adosName}</Badge>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 28, alignItems: 'center' }}>
+                <StatPill label="Audits" value={completed.length} />
+                <StatPill label="Passed" value={`${stats.passed}/${completed.length}`} tone="ok" />
+                <ScoreRing value={stats.avg} size={96} stroke={10} threshold={threshold} label="Overall" />
+              </div>
+            </div>
+          </Card>
+
+          <Card title="Score trend" subtitle="Overall score across audits, oldest → newest. Dashed line = pass threshold.">
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.1fr)', gap: 28, alignItems: 'center' }} className="perf-grid">
+              <div>
+                <TrendLine data={stats.trend} threshold={threshold} height={150} />
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+                  <Badge tone="ok">★ Strongest · {SECTIONS[stats.best.i].name} {stats.best.v}%</Badge>
+                  <Badge tone="bad">↓ Focus · {SECTIONS[stats.worst.i].name} {stats.worst.v}%</Badge>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+                {SECTIONS.map((s, i) => {
+                  const v = stats.secAvg[i]; const tone = v == null ? 'neutral' : scoreTone(v, threshold);
                   return (
-                    <React.Fragment key={c.city}>
-                      {/* city header row */}
-                      <tr onClick={() => toggle(c.city)} style={{ cursor: 'pointer', background: 'var(--surface-2)' }}>
-                        <td style={{ ...window.tdStyle, borderBottom: '1px solid var(--line)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                            <span style={{ fontSize: 10, color: 'var(--ink-3)', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', display: 'inline-block', width: 10 }}>▶</span>
-                            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14 }}>{c.city}</span>
-                            <Badge tone="neutral" mono>{c.tls.length} TL{c.tls.length === 1 ? '' : 's'}</Badge>
-                          </div>
-                        </td>
-                        <NumCell value={c.totalMS} strong />
-                        <DoneCell held={c.held} due={c.due} strong />
-                        <NumCell value={c.auditsDone} strong tone="ok" />
-                        <NumCell value={c.pending} strong tone={c.pending ? 'warn' : 'ink-3'} />
-                        <NumCell value={c.approved} strong tone="ok" />
-                        <NumCell value={c.rejected} strong tone={c.rejected ? 'bad' : 'ink-3'} />
-                        <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center', borderBottom: '1px solid var(--line)' }}>
-                          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: cScore == null ? 'var(--ink-3)' : `var(--${scoreTone(cScore, threshold) === 'neutral' ? 'ink' : scoreTone(cScore, threshold)})` }}>{cScore == null ? '—' : cScore + '%'}</span>
-                        </td>
-                      </tr>
-                      {/* TL rows */}
-                      {open && c.tls.map(t => {
-                        const tScore = aggScore(t);
-                        return (
-                          <tr key={(t.tlEmail || t.tlName)} style={{ transition: 'background 0.12s' }}
-                            onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
-                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                            <td style={window.tdStyle}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 11, paddingLeft: 19 }}>
-                                <Avatar name={t.tlName} size={28} />
-                                <span style={{ fontWeight: 600, fontSize: 13.5 }}>{t.tlName}</span>
-                              </div>
-                            </td>
-                            <NumCell value={t.totalMS} />
-                            <DoneCell held={t.held} due={t.due} />
-                            <NumCell value={t.auditsDone} tone="ok" />
-                            <td style={{ ...window.tdStyle, textAlign: 'center' }}>
-                              {t.pending ? <Badge tone="warn" mono>{t.pending}</Badge> : <span className="tnum" style={{ color: 'var(--ink-3)', fontFamily: 'var(--font-mono)', fontSize: 13.5 }}>0</span>}
-                            </td>
-                            <NumCell value={t.approved} tone="ok" />
-                            <NumCell value={t.rejected} tone={t.rejected ? 'bad' : null} />
-                            <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center', fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13.5, color: tScore == null ? 'var(--ink-3)' : `var(--${scoreTone(tScore, threshold) === 'neutral' ? 'ink' : scoreTone(tScore, threshold)})` }}>{tScore == null ? '—' : tScore + '%'}</td>
-                          </tr>
-                        );
-                      })}
-                    </React.Fragment>
+                    <div key={s.key} style={{ display: 'grid', gridTemplateColumns: '128px 1fr 40px', gap: 10, alignItems: 'center' }}>
+                      <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{s.name}</span>
+                      <div style={{ height: 6, background: 'var(--surface-2)', borderRadius: 99, overflow: 'hidden' }}>
+                        <div style={{ width: (v || 0) + '%', height: '100%', background: `var(--${tone === 'neutral' ? 'ink-3' : tone})`, borderRadius: 99 }} />
+                      </div>
+                      <span className="tnum" style={{ fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-mono)', textAlign: 'right', color: `var(--${tone === 'neutral' ? 'ink-3' : tone})` }}>{v == null ? '—' : v}</span>
+                    </div>
                   );
                 })}
-              </tbody>
-              <tfoot>
-                <tr style={{ background: 'var(--primary-softer)' }}>
-                  <td style={{ ...window.tdStyle, borderTop: '2px solid var(--line)', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13.5 }}>All cities · Grand total</td>
-                  <NumCell value={grand.totalMS} strong />
-                  <DoneCell held={grand.held} due={grand.due} strong />
-                  <NumCell value={grand.auditsDone} strong tone="ok" />
-                  <NumCell value={grand.pending} strong tone={grand.pending ? 'warn' : 'ink-3'} />
-                  <NumCell value={grand.approved} strong tone="ok" />
-                  <NumCell value={grand.rejected} strong tone={grand.rejected ? 'bad' : 'ink-3'} />
-                  <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>{aggScore(grand) == null ? '—' : aggScore(grand) + '%'}</td>
-                </tr>
-              </tfoot>
-            </Table>
-          </div>
-        ) : <EmptyState title="No meetings match these filters" body="Try widening the date range or clearing filters." />}
-      </Card>
+              </div>
+            </div>
+          </Card>
 
-      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.6 }}>
-        <b>Total MS</b> = meetings in the tracker · <b>Meetings Done</b> = scheduled meetings actually completed, out of those already due (held ÷ due) · <b>Audits Done</b> = those with a matching QA audit (joined on lead ID) ·
-        <b> Pending</b> = Total MS − Audits Done · <b>Approved / Rejected</b> = meeting status set after the audit ·
-        <b> Meeting Score</b> = average audit score across audited meetings.
+          {/* meeting tracker */}
+          <Card title="Lead & meeting tracker" subtitle="Audit score and how each meeting progressed after the audit." pad={false}>
+            <div style={{ overflowX: 'auto' }}>
+              <Table>
+                <thead><tr>
+                  <th style={thStyle}>Lead ID</th>
+                  <th style={thStyle}>Meeting schedule date</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Audit score</th>
+                  <th style={thStyle}>Meeting status</th>
+                  <th style={thStyle}>Status after audit</th>
+                </tr></thead>
+                <tbody>
+                  {group.map(a => (
+                    <tr key={a.id} onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <td style={tdStyle}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-2)' }}>{a.leadId}</span></td>
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{a.meetingDate ? fmtDate(a.meetingDate) : '—'}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}><Badge tone={scoreTone(a.overall, threshold)} mono>{a.overall}%</Badge></td>
+                      <td style={tdStyle}><Badge tone={statusTone(a.meetingStatus)}>{a.meetingStatus}</Badge></td>
+                      <td style={tdStyle}><Badge tone={statusTone(a.meetingStatusAfterAudit)}>{a.meetingStatusAfterAudit}</Badge></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </div>
+          </Card>
+
+          {/* history */}
+          <Card title="Evaluation history" subtitle={`${completed.length} audits on record`} pad={false}>
+            <div style={{ overflowX: 'auto' }}>
+              <Table>
+                <thead><tr>
+                  <th style={thStyle}>Date</th>
+                  <th style={thStyle}>Lead ID</th>
+                  <th style={thStyle}>Auditor</th>
+                  {SECTIONS.map(s => <th key={s.key} style={{ ...thStyle, textAlign: 'center' }}>{s.short}</th>)}
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Score</th>
+                  <th style={thStyle}>Action items</th>
+                </tr></thead>
+                <tbody>
+                  {completed.map(a => (
+                    <tr key={a.id} onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{fmtDate(a.callDate)}</td>
+                      <td style={tdStyle}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-2)' }}>{a.leadId}</span></td>
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{a.auditorName || '—'}</td>
+                      {SECTIONS.map(s => { const v = a.sectionPct[s.key]; const tone = v == null ? 'neutral' : scoreTone(v, threshold); return <td key={s.key} className="tnum" style={{ ...tdStyle, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12.5, color: v == null ? 'var(--ink-3)' : `var(--${tone === 'neutral' ? 'ink-3' : tone})` }}>{v == null ? '—' : v}</td>; })}
+                      <td style={{ ...tdStyle, textAlign: 'center' }}><Badge tone={a.overall >= threshold ? 'ok' : 'bad'} mono>{a.overall}%</Badge></td>
+                      <td style={{ ...tdStyle, maxWidth: 260 }}><span style={{ fontSize: 12.5, color: 'var(--ink-3)', display: 'block', lineHeight: 1.4 }}>{a.notes?.actionItems || '—'}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </div>
+          </Card>
+        </div>
+      )}
       </div>
     </div>
   );
 }
 
-Object.assign(window, { SummaryView, exportSummaryCSV });
+function StatPill({ label, value, tone = 'neutral' }) {
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <div className="tnum" style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 26, color: tone === 'ok' ? 'var(--ok)' : 'var(--ink)' }}>{value}</div>
+      <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
+Object.assign(window, { PerformanceView });

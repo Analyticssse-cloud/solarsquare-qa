@@ -137,8 +137,9 @@ Full step-by-step (including the no-Git-install GitHub upload) is in **`DEPLOY-V
 Short version:
 
 1. Get this folder into a **GitHub repo** (private is fine).
-2. **vercel.com → Add New… → Project → Import** the repo. The **Vite** preset is auto-detected;
-   `vercel.json` already sets build command `npm run build` and output `dist`.
+2. **vercel.com → Add New… → Project → Import** the repo. The **Vite** preset is auto-detected,
+   which sets build command `npm run build` and output `dist`; functions in `/api` are
+   auto-detected too. No `vercel.json` needed.
 3. Add **Environment Variables** (same values as your `.env`): `SHEET_ID`, `GOOGLE_SA_EMAIL`,
    `GOOGLE_SA_KEY`, `ALLOWED_DOMAIN`, `ALLOWED_EMAILS`, `VITE_GOOGLE_CLIENT_ID`,
    `VITE_ALLOWED_DOMAIN`, `VITE_ALLOWED_EMAILS` (and optional `GMAIL_SENDER`).
@@ -154,7 +155,6 @@ Every push to the repo's main branch auto-deploys. To change an env var, edit it
 ```
 index.html                 Vite entry (theme tokens live here)
 vite.config.mjs
-vercel.json                build config + SPA rewrite (everything non-/api → index.html)
 DEPLOY-VERCEL.md           browser-only deploy walkthrough
 src/
   globals.js               exposes window.React/ReactDOM for the ported files
