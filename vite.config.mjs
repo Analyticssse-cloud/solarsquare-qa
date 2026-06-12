@@ -1,22 +1,17 @@
-{
-  "name": "qa-dashboard",
-  "private": true,
-  "version": "1.0.0",
-  "description": "SolarSquare Quality Systems — QA audit dashboard (React + Vite, serverless API on Vercel, backed by Google Sheets).",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+import { defineConfig } from 'vite';
+
+// The ported component files use a global `React` / `ReactDOM` (provided by src/globals.js,
+// which runs first). esbuild's classic JSX transform compiles <jsx> to React.createElement,
+// which resolves to that global — so the original files run unchanged, no per-file imports.
+export default defineConfig({
+  esbuild: {
+    jsxFactory: 'React.createElement',
+    jsxFragment: 'React.Fragment',
   },
-  "engines": {
-    "node": "20.x"
+  server: {
+    port: 5173,
+    // Windows + `netlify dev`: don't watch Netlify's temp build folder (causes EBUSY crash).
+    watch: { ignored: ['**/.netlify/**'] },
   },
-  "dependencies": {
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "googleapis": "^144.0.0"
-  },
-  "devDependencies": {
-    "vite": "^5.4.10"
-  }
-}
+  build: { outDir: 'dist' },
+});

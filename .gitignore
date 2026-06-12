@@ -11,6 +11,9 @@ dist/
 # netlify
 .netlify/
 
+# vercel
+.vercel/
+
 # misc
 .DS_Store
 *.log
