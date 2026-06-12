@@ -4,28 +4,20 @@ const { useState: useStateSm, useMemo: useMemoSm } = React;
 const APPROVED_SET = ['Confirmed', 'Completed'];
 const REJECTED_SET = ['Rescheduled', 'Dropped', 'No-show', 'Rejected'];
 const SUMMARY_TODAY = '2026-06-08';
-// A meeting is "due" (should have happened) once it has a resolved outcome OR its date has passed.
-const RESOLVED_MEETING = ['Completed', 'No-show', 'Rescheduled', 'Cancelled', 'Dropped'];
 
 // blank accumulator for a city / TL roll-up bucket
 function blankAgg() {
-  return { totalMS: 0, due: 0, held: 0, auditsDone: 0, pending: 0, approved: 0, rejected: 0, scoreSum: 0, scoreCount: 0 };
+  return { totalMS: 0, held: 0, auditsDone: 0, pending: 0, approved: 0, rejected: 0, scoreSum: 0, scoreCount: 0 };
 }
 // `meeting` = the tracker row; `audit` = its matching QA audit (or null).
+// "Meetings Done" is scoped to AUDITED meetings: of the audits done, how many had the
+// meeting actually happen (Meeting Done Date filled / status Completed). Denominator = auditsDone.
 function addToAgg(agg, audit, meeting) {
   agg.totalMS++;
-  // meeting outcome — a meeting counts toward "due" once it has a resolved status or its date passed
-  if (meeting) {
-    const st = meeting.meetingStatus || '';
-    const iso = meeting.scheduleISO || (meeting.scheduleDate || '').slice(0, 10);
-    const isDue = RESOLVED_MEETING.indexOf(st) >= 0 || (iso && iso <= SUMMARY_TODAY);
-    if (isDue) {
-      agg.due++;
-      if (st === 'Completed') agg.held++;
-    }
-  }
   if (audit) {
     agg.auditsDone++;
+    const happened = meeting && (meeting.meetingStatus === 'Completed' || meeting.meetingDoneISO);
+    if (happened) agg.held++;
     agg.scoreSum += audit.overall; agg.scoreCount++;
     if (APPROVED_SET.indexOf(audit.meetingStatusAfterAudit) >= 0) agg.approved++;
     else if (REJECTED_SET.indexOf(audit.meetingStatusAfterAudit) >= 0) agg.rejected++;
@@ -34,19 +26,19 @@ function addToAgg(agg, audit, meeting) {
   }
 }
 function aggScore(agg) { return agg.scoreCount ? Math.round(agg.scoreSum / agg.scoreCount) : null; }
-function aggDoneRate(agg) { return agg.due ? Math.round((agg.held / agg.due) * 100) : null; }
+function aggDoneRate(agg) { return agg.auditsDone ? Math.round((agg.held / agg.auditsDone) * 100) : null; }
 function doneTone(rate) { return rate == null ? 'neutral' : (rate >= 75 ? 'ok' : rate >= 55 ? 'warn' : 'bad'); }
 
-// Meetings-Done cell: held count over the meetings that were due, with the done-rate.
-function DoneCell({ held, due, strong }) {
-  const rate = due ? Math.round((held / due) * 100) : null;
+// Meetings-Done cell: of the audited meetings, how many actually happened, with the rate.
+function DoneCell({ held, outOf, strong }) {
+  const rate = outOf ? Math.round((held / outOf) * 100) : null;
   const tone = doneTone(rate);
   const col = tone === 'neutral' ? 'var(--ink-3)' : `var(--${tone})`;
   return (
     <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15, gap: 1 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: strong ? 700 : 600, fontSize: strong ? 14 : 13.5, color: held === 0 ? 'var(--ink-3)' : col }}>
-          {held}<span style={{ color: 'var(--ink-3)', fontWeight: 500 }}>/{due || 0}</span>
+          {held}<span style={{ color: 'var(--ink-3)', fontWeight: 500 }}>/{outOf || 0}</span>
         </span>
         <span style={{ fontSize: 10.5, fontWeight: 700, color: col }}>{rate == null ? '—' : rate + '%'}</span>
       </div>
@@ -56,14 +48,14 @@ function DoneCell({ held, due, strong }) {
 
 // ---- CSV export of the summary (one row per TL, plus city subtotals) ----
 function exportSummaryCSV(cities, grand) {
-  const head = ['City', 'Team Lead', 'Total MS', 'Meetings Done', 'Due', 'Done %', 'Audits Done', 'Pending', 'Meeting Approved', 'Meetings Rejected', 'Meeting Score'];
+  const head = ['City', 'Team Lead', 'Total MS', 'Audits Done', 'Meetings Happened', 'Done %', 'Pending', 'Meeting Approved', 'Meetings Rejected', 'Meeting Score'];
   const lines = [head.join(',')];
   const cell = v => (v == null ? '' : '"' + String(v).replace(/"/g, '""') + '"');
   cities.forEach(c => {
-    c.tls.forEach(t => lines.push([cell(c.city), cell(t.tlName), t.totalMS, t.held, t.due, aggDoneRate(t) == null ? '' : aggDoneRate(t), t.auditsDone, t.pending, t.approved, t.rejected, aggScore(t) == null ? '' : aggScore(t)].join(',')));
-    lines.push([cell(c.city), cell('— City total —'), c.totalMS, c.held, c.due, aggDoneRate(c) == null ? '' : aggDoneRate(c), c.auditsDone, c.pending, c.approved, c.rejected, aggScore(c) == null ? '' : aggScore(c)].join(','));
+    c.tls.forEach(t => lines.push([cell(c.city), cell(t.tlName), t.totalMS, t.auditsDone, t.held, aggDoneRate(t) == null ? '' : aggDoneRate(t), t.pending, t.approved, t.rejected, aggScore(t) == null ? '' : aggScore(t)].join(',')));
+    lines.push([cell(c.city), cell('— City total —'), c.totalMS, c.auditsDone, c.held, aggDoneRate(c) == null ? '' : aggDoneRate(c), c.pending, c.approved, c.rejected, aggScore(c) == null ? '' : aggScore(c)].join(','));
   });
-  lines.push([cell('ALL CITIES'), cell('Grand total'), grand.totalMS, grand.held, grand.due, aggDoneRate(grand) == null ? '' : aggDoneRate(grand), grand.auditsDone, grand.pending, grand.approved, grand.rejected, aggScore(grand) == null ? '' : aggScore(grand)].join(','));
+  lines.push([cell('ALL CITIES'), cell('Grand total'), grand.totalMS, grand.auditsDone, grand.held, aggDoneRate(grand) == null ? '' : aggDoneRate(grand), grand.pending, grand.approved, grand.rejected, aggScore(grand) == null ? '' : aggScore(grand)].join(','));
   const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -181,8 +173,8 @@ function SummaryView({ audits, meetings, threshold }) {
       {/* KPI band */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }} className="kpi-grid">
         <StatCard label="Total MS" value={grand.totalMS} tone="primary" sub="meetings scheduled" />
-        <StatCard label="Meetings Done" value={grand.held} tone={doneTone(doneRate) === 'neutral' ? 'primary' : doneTone(doneRate)} sub={doneRate == null ? '—' : `${doneRate}% of ${grand.due} due`} />
         <StatCard label="Audits Done" value={grand.auditsDone} tone="ok" sub={grand.totalMS ? coverage + '% coverage' : '—'} />
+        <StatCard label="Meetings Done" value={grand.held} tone={doneTone(doneRate) === 'neutral' ? 'primary' : doneTone(doneRate)} sub={doneRate == null ? 'of 0 audited' : `${doneRate}% of ${grand.auditsDone} audited`} />
         <StatCard label="Pending" value={grand.pending} tone={grand.pending ? 'warn' : 'ok'} sub="awaiting audit" />
         <StatCard label="Avg meeting score" value={aggScore(grand) == null ? '—' : aggScore(grand) + '%'} tone={aggScore(grand) == null ? 'neutral' : (aggScore(grand) >= threshold ? 'ok' : 'warn')} sub={`approved ${grand.approved} · rejected ${grand.rejected}`} />
       </div>
@@ -225,7 +217,7 @@ function SummaryView({ audits, meetings, threshold }) {
             <Table>
               <thead><tr>
                 <th style={{ ...window.thStyle, left: 0 }}>City / Team Lead</th>
-                <Th>Total MS</Th><Th>Meetings Done</Th><Th>Audits Done</Th><Th>Pending</Th>
+                <Th>Total MS</Th><Th>Audits Done</Th><Th>Meetings Done</Th><Th>Pending</Th>
                 <Th>Approved</Th><Th>Rejected</Th><Th>Meeting Score</Th>
               </tr></thead>
               <tbody>
@@ -244,8 +236,8 @@ function SummaryView({ audits, meetings, threshold }) {
                           </div>
                         </td>
                         <NumCell value={c.totalMS} strong />
-                        <DoneCell held={c.held} due={c.due} strong />
                         <NumCell value={c.auditsDone} strong tone="ok" />
+                        <DoneCell held={c.held} outOf={c.auditsDone} strong />
                         <NumCell value={c.pending} strong tone={c.pending ? 'warn' : 'ink-3'} />
                         <NumCell value={c.approved} strong tone="ok" />
                         <NumCell value={c.rejected} strong tone={c.rejected ? 'bad' : 'ink-3'} />
@@ -267,8 +259,8 @@ function SummaryView({ audits, meetings, threshold }) {
                               </div>
                             </td>
                             <NumCell value={t.totalMS} />
-                            <DoneCell held={t.held} due={t.due} />
                             <NumCell value={t.auditsDone} tone="ok" />
+                            <DoneCell held={t.held} outOf={t.auditsDone} />
                             <td style={{ ...window.tdStyle, textAlign: 'center' }}>
                               {t.pending ? <Badge tone="warn" mono>{t.pending}</Badge> : <span className="tnum" style={{ color: 'var(--ink-3)', fontFamily: 'var(--font-mono)', fontSize: 13.5 }}>0</span>}
                             </td>
@@ -286,8 +278,8 @@ function SummaryView({ audits, meetings, threshold }) {
                 <tr style={{ background: 'var(--primary-softer)' }}>
                   <td style={{ ...window.tdStyle, borderTop: '2px solid var(--line)', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13.5 }}>All cities · Grand total</td>
                   <NumCell value={grand.totalMS} strong />
-                  <DoneCell held={grand.held} due={grand.due} strong />
                   <NumCell value={grand.auditsDone} strong tone="ok" />
+                  <DoneCell held={grand.held} outOf={grand.auditsDone} strong />
                   <NumCell value={grand.pending} strong tone={grand.pending ? 'warn' : 'ink-3'} />
                   <NumCell value={grand.approved} strong tone="ok" />
                   <NumCell value={grand.rejected} strong tone={grand.rejected ? 'bad' : 'ink-3'} />
@@ -300,7 +292,7 @@ function SummaryView({ audits, meetings, threshold }) {
       </Card>
 
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.6 }}>
-        <b>Total MS</b> = meetings in the tracker · <b>Meetings Done</b> = scheduled meetings actually completed, out of those already due (held ÷ due) · <b>Audits Done</b> = those with a matching QA audit (joined on lead ID) ·
+        <b>Total MS</b> = meetings in the tracker · <b>Audits Done</b> = those with a matching QA audit (joined on lead ID) · <b>Meetings Done</b> = of the audited meetings, how many actually happened — Meeting Done Date filled / status Completed (held ÷ Audits Done) ·
         <b> Pending</b> = Total MS − Audits Done · <b>Approved / Rejected</b> = meeting status set after the audit ·
         <b> Meeting Score</b> = average audit score across audited meetings.
       </div>
