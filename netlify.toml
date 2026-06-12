@@ -1,43 +1,13 @@
-functionsDirectory = "C:\\dev\\netlify-react-app\\netlify\\functions"
-functionsDirectoryOrigin = "config"
-redirectsOrigin = "config"
-plugins = []
-headers = []
-
 [build]
-publish = "C:\\dev\\netlify-react-app\\dist"
-publishOrigin = "config"
-commandOrigin = "config"
-command = "npm run build"
-functions = "C:\\dev\\netlify-react-app\\netlify\\functions"
-
-  [build.environment]
-
-  [build.processing]
-
-    [build.processing.css]
-
-    [build.processing.html]
-
-    [build.processing.images]
-
-    [build.processing.js]
-
-  [build.services]
+  command = "npm run build"
+  publish = "dist"
 
 [functions]
-
-  [functions."*"]
+  directory = "netlify/functions"
   node_bundler = "esbuild"
 
+# Pretty API paths: /api/employees -> /.netlify/functions/employees
 [[redirects]]
-from = "/api/*"
-to = "/.netlify/functions/:splat"
-status = 200
-force = false
-
-  [redirects.query]
-
-  [redirects.conditions]
-
-  [redirects.headers]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
