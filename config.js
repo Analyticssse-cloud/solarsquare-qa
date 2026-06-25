@@ -1,40 +1,57 @@
-// config.js  →  GET /api/config
-// Serves the PUBLIC front-end auth config, read from environment variables at RUNTIME.
-//
-// Why this exists: VITE_* variables are compiled into the JS at *build* time, so if Netlify
-// doesn't expose them to the build (wrong scope/context) the gate silently turns off. Reading
-// them here at runtime removes that whole class of failure — change the client ID in Netlify
-// and it takes effect on the next request, no rebuild needed.
-//
-// Only NON-secret values are returned (the OAuth *client ID* is public by design; it ships in
-// every browser anyway). The service-account key, allowlist, etc. are NEVER sent here.
-const { json } = require('./_sheets');
+// _sheets.js — shared Google Sheets helper for the Netlify Functions.
+// Files prefixed with "_" are NOT deployed as endpoints; they're imported by the others.
+// Auth uses a Google service account (no end-user consent needed). Share your Sheet with
+// the service account's email as an Editor.
+const { google } = require('googleapis');
 
-exports.handler = async () => {
-  const clientId = process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || '';
-  const allowedDomain = (process.env.ALLOWED_DOMAIN || process.env.VITE_ALLOWED_DOMAIN || '').toLowerCase();
-  const allowlist = String(process.env.ALLOWED_EMAILS || process.env.VITE_ALLOWED_EMAILS || '')
-    .split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+function sheetsClient() {
+  const auth = new google.auth.JWT(
+    process.env.GOOGLE_SA_EMAIL,
+    null,
+    (process.env.GOOGLE_SA_KEY || '').replace(/\\n/g, '\n'),
+    ['https://www.googleapis.com/auth/spreadsheets']
+  );
+  return google.sheets({ version: 'v4', auth });
+}
 
-  // QA Auditors — emails that should sign in as the cross-team QA Auditor role (not a TL).
-  // These are employees, not secrets, so the list is safe to expose: the browser uses it to
-  // label sign-ins and to tag/segment scores as TL vs QA.
-  const qaAuditors = String(process.env.QA_AUDITOR_EMAILS || process.env.VITE_QA_AUDITOR_EMAILS || '')
-    .split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
-  // Default to the known QA Auditor if the env var hasn't been set yet, so the role works
-  // out of the box. Setting QA_AUDITOR_EMAILS in the environment overrides this entirely.
-  if (!qaAuditors.length) qaAuditors.push('samapti.pal@solarsquare.in');
+async function readSheet(range) {
+  const s = sheetsClient();
+  const res = await s.spreadsheets.values.get({ spreadsheetId: process.env.SHEET_ID, range });
+  return res.data.values || [];
+}
 
-  return json(200, {
-    // gate is ON whenever a client ID is configured
-    enabled: !!clientId,
-    clientId,
-    allowedDomain,
-    // booleans only — we don't leak the actual admin list to the browser
-    restricted: allowlist.length > 0,
-    qaAuditors,
+async function appendRow(range, row) {
+  const s = sheetsClient();
+  await s.spreadsheets.values.append({
+    spreadsheetId: process.env.SHEET_ID,
+    range,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [row] },
   });
-};
+}
 
-// --- Vercel adapter: expose the handler as a Vercel serverless function ---
-module.exports = require('./_adapter')(exports.handler);
+// values[] (incl. header row) -> array of objects keyed by trimmed header (whitespace-tolerant)
+function rowsToObjects(values) {
+  if (!values || values.length < 2) return [];
+  const head = values[0].map(h => String(h).trim());
+  return values.slice(1).map(r => {
+    const o = {}; head.forEach((h, i) => { o[h] = r[i]; }); return o;
+  });
+}
+
+// Tolerant field lookup: matches a header by any of `candidates`, ignoring case, spaces,
+// underscores and punctuation. So "TL Email", "tl_email", "Team Lead Email" all resolve.
+function pick(row, candidates) {
+  const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const want = candidates.map(squash);
+  for (const rk of Object.keys(row)) {
+    if (want.indexOf(squash(rk)) >= 0) return row[rk];
+  }
+  return '';
+}
+
+function json(status, body) {
+  return { statusCode: status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+module.exports = { readSheet, appendRow, rowsToObjects, pick, json };
