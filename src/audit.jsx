@@ -279,8 +279,8 @@ function LeadPicker({ pending, auditorEmail, auditorName, role, tlAudited, onPic
             <input type="date" value={dateFilter} onChange={e => setDateFilter(e.target.value)}
               style={{ height: 32, padding: '0 9px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 12.5, fontFamily: 'inherit' }} />
             {dateFilter
-              ? <button type="button" onClick={() => setDateFilter('')} style={{ height: 32, padding: '0 11px', borderRadius: 99, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontSize: 12, fontWeight: 600 }}>Clear · show all dates</button>
-              : <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>Showing all scheduled dates</span>}
+              ? <button type="button" onClick={() => setDateFilter('')} style={{ height: 32, padding: '0 11px', borderRadius: 99, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontSize: 12, fontWeight: 600 }}>Clear · today &amp; upcoming</button>
+              : <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>Showing today &amp; upcoming</span>}
           </div>
           {dateOptions.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, overflowX: 'auto' }}>
@@ -324,7 +324,7 @@ function LeadPicker({ pending, auditorEmail, auditorName, role, tlAudited, onPic
                     : 'No meetings match your filter.')
                 : tab === 'mine'
                 ? <>No pending meetings assigned to <b>{auditorName || 'you'}</b>. Try <span style={{ color: 'var(--primary-strong)', fontWeight: 600 }}>All pending</span>.</>
-                : (pending.length === 0 ? 'No pending meetings in the tracker — every scheduled meeting has been audited. 🎉' : 'No meetings match your filter.')}
+                : (pending.length === 0 ? 'No meetings scheduled for today or later are pending — all caught up. 🎉' : 'No meetings match your filter.')}
             </div>
           )}
         </div>
@@ -361,14 +361,16 @@ function AuditView({ agents, meetings = [], audits = [], onSubmit, threshold, se
 
   // pending = scheduled meetings THIS ROLE hasn't audited yet. Per-role on purpose: a lead a
   // TL already scored still appears for the QA Auditor (and vice-versa), so both can
-  // independently audit the same lead.
+  // independently audit the same lead. Past-day meetings drop off — auditors only work
+  // today's & upcoming meetings (the "Scheduled on" picker can still target a specific day).
+  const todayISO = (() => { const d = new Date(); const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); })();
   const pending = useMemoA(() => {
     const done = new Set(
       audits.filter(a => (a.auditorRole || window.QA.roleForEmail(a.auditorEmail)) === myRole)
             .map(a => a.leadId)
     );
-    return meetings.filter(m => !done.has(m.leadId));
-  }, [meetings, audits, myRole]);
+    return meetings.filter(m => !done.has(m.leadId) && (!m.scheduleISO || m.scheduleISO >= todayISO));
+  }, [meetings, audits, myRole, todayISO]);
   // Leads a TL has audited — the QA Auditor's primary "needs review" queue.
   const tlAuditedLeads = useMemoA(() => new Set(
     audits.filter(a => (a.auditorRole || window.QA.roleForEmail(a.auditorEmail)) === 'TL').map(a => a.leadId)
