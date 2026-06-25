@@ -1,415 +1,303 @@
-// data.js — domain model, scoring logic, and realistic mock audits.
-// Exported on window for the other babel scripts.
+// summary.jsx — City & TL audit summary (the manager landing view). window.SummaryView
+const { useState: useStateSm, useMemo: useMemoSm } = React;
 
-// ---- Evaluation framework: 5 sections, 17 criteria ----
-const SECTIONS = [
-  { key: 'opening', name: 'Opening', short: 'Open', items: [
-    { label: 'Greeting & self-introduction', eg: ['Namaste se Kapil ji main shankar nagar office se laxshmi bol rahi hun'] },
-    { label: 'Stated purpose / set reference for the call', eg: ['Apne solar main interest show kiya tha', 'Apka roof survery hua tha uska design ready hai'] },
-  ]},
-  { key: 'selling', name: 'Selling', short: 'Sell', items: [
-    'Briefly explained SolarSquare',
-    'Explained the benefits of the site visit',
-    { label: 'Value proposition', eg: ['Topcon & site visit'] },
-    { label: 'End to end service', eg: ['from design to installation to subsidy'] },
-    'Insurance & warranty info',
-  ]},
-  { key: 'qualification', name: 'Qualification', short: 'Qual', items: [
-    'Captured monthly electricity bill',
-    'Confirmed roof ownership',
-    'Roof Type',
-    'Identified meter type & phases',
-    'Construction status',
-    'Evaluated shadow / obstruction',
-  ]},
-  { key: 'objection', name: 'Objection Handling', short: 'Obj', items: [
-    'Clear, concise answers & redirection',
-  ]},
-  { key: 'closing', name: 'Closing', short: 'Close', items: [
-    'Set the appointment Time',
-    'Confirmed Appointment date',
-    'Correct CRM logging & Disposition',
-  ]},
-];
+const APPROVED_SET = ['Confirmed', 'Completed'];
+const REJECTED_SET = ['Rescheduled', 'Dropped', 'No-show', 'Rejected'];
+const SUMMARY_TODAY = '2026-06-08';
 
-// normalize an item to { label, eg }
-function normItem(item) { return typeof item === 'string' ? { label: item, eg: [] } : { eg: [], ...item }; }
-
-// flat list of all 17 params with section ref
-const PARAMS = [];
-SECTIONS.forEach((s, si) => s.items.forEach((item, ii) => {
-  const it = normItem(item);
-  PARAMS.push({ id: `${s.key}-${ii}`, label: it.label, eg: it.eg, section: s.key, sectionName: s.name, sectionIdx: si });
-}));
-
-const PASS_DEFAULT = 80;
-
-// ---- Scoring ----
-// Each section scored as % of Yes among applicable (non-NA) items.
-// Overall = mean of the 5 section percentages (each section weighted equally, "Max 5 pts").
-function scoreAudit(answers) {
-  // answers: { [paramId]: 'Yes'|'No'|'NA' }
-  const sectionPct = {};
-  SECTIONS.forEach(s => {
-    const ids = s.items.map((_, ii) => `${s.key}-${ii}`);
-    let applicable = 0, yes = 0;
-    ids.forEach(id => {
-      const a = answers[id];
-      if (a === 'NA' || a == null) return;
-      applicable++;
-      if (a === 'Yes') yes++;
-    });
-    sectionPct[s.key] = applicable === 0 ? null : Math.round((yes / applicable) * 100);
-  });
-  const vals = SECTIONS.map(s => sectionPct[s.key]).filter(v => v != null);
-  const overall = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
-  return { sectionPct, overall };
+// blank accumulator for a city / TL roll-up bucket
+function blankAgg() {
+  return { totalMS: 0, held: 0, auditsDone: 0, pending: 0, approved: 0, rejected: 0, scoreSum: 0, scoreCount: 0 };
 }
-
-// ---- People ----
-// Hierarchy: LRM (agent) -> Team Lead -> ZSM (manager) -> ADOS
-const ADOS_LIST = [
-  { name: 'Sanjay Kapoor', email: 'sanjay.kapoor@solarsquare.in' },
-  { name: 'Ritu Malhotra', email: 'ritu.malhotra@solarsquare.in' },
-];
-const MANAGERS = [
-  { name: 'Rohan Mehta', email: 'rohan.mehta@solarsquare.in', ados: 0 },
-  { name: 'Aditi Sharma', email: 'aditi.sharma@solarsquare.in', ados: 1 },
-];
-const TEAM_LEADS = [
-  { name: 'Vikram Nair', email: 'vikram.nair@solarsquare.in', mgr: 0 },
-  { name: 'Sneha Patil', email: 'sneha.patil@solarsquare.in', mgr: 0 },
-  { name: 'Imran Khan', email: 'imran.khan@solarsquare.in', mgr: 1 },
-  { name: 'Divya Reddy', email: 'divya.reddy@solarsquare.in', mgr: 1 },
-];
-const AGENTS = [
-  { name: 'Aarav Joshi',     tl: 0 }, { name: 'Priya Kulkarni',  tl: 0 },
-  { name: 'Karthik Iyer',    tl: 1 }, { name: 'Neha Bansal',     tl: 1 },
-  { name: 'Sahil Verma',     tl: 2 }, { name: 'Ananya Das',      tl: 2 },
-  { name: 'Rahul Pillai',    tl: 3 }, { name: 'Meera Chauhan',   tl: 3 },
-  { name: 'Tushar Gupta',    tl: 0 }, { name: 'Fatima Sheikh',   tl: 2 },
-].map(a => {
-  const slug = a.name.toLowerCase().replace(/[^a-z]+/g, '.');
-  const tl = TEAM_LEADS[a.tl];
-  const mgr = MANAGERS[tl.mgr];
-  const ados = ADOS_LIST[mgr.ados];
-  return {
-    name: a.name,
-    email: `${slug}@solarsquare.in`,
-    tlName: tl.name, tlEmail: tl.email,
-    mgrName: mgr.name, mgrEmail: mgr.email,
-    adosName: ados.name, adosEmail: ados.email,
-  };
-});
-const QA_AUDITORS = [
-  { name: 'Pooja Menon',  email: 'pooja.menon@solarsquare.in' },
-  { name: 'Arjun Saxena', email: 'arjun.saxena@solarsquare.in' },
-  { name: 'Kavya Rao',    email: 'kavya.rao@solarsquare.in' },
-];
-
-// ---- Auditor roles ----
-// Two kinds of auditor sign in: a lead's Team Lead (TL) and a dedicated QA Auditor who
-// independently re-audits leads across every team. A QA Auditor is identified purely by
-// email; this list seeds the demo and is overridden at runtime from /api/config
-// (QA_AUDITOR_EMAILS env) so adding a new auditor never needs a code change.
-let QA_AUDITOR_EMAILS = QA_AUDITORS.map(a => a.email.toLowerCase()).concat(['samapti.pal@solarsquare.in']);
-const ROLE_LABEL = { TL: 'Team Lead', QA: 'QA Auditor' };
-function roleForEmail(email) {
-  const e = String(email || '').trim().toLowerCase();
-  return e && QA_AUDITOR_EMAILS.indexOf(e) >= 0 ? 'QA' : 'TL';
-}
-function setQaAuditorEmails(list) {
-  if (Array.isArray(list) && list.length) {
-    QA_AUDITOR_EMAILS = list.map(s => String(s).trim().toLowerCase()).filter(Boolean);
+// `meeting` = the tracker row; `audit` = its matching QA audit (or null).
+// "Meetings Done" is scoped to AUDITED meetings: of the audits done, how many had the
+// meeting actually happen (Meeting Done Date filled / status Completed). Denominator = auditsDone.
+function addToAgg(agg, audit, meeting) {
+  agg.totalMS++;
+  if (audit) {
+    agg.auditsDone++;
+    const happened = meeting && (meeting.meetingStatus === 'Completed' || meeting.meetingDoneISO);
+    if (happened) agg.held++;
+    agg.scoreSum += audit.overall; agg.scoreCount++;
+    if (APPROVED_SET.indexOf(audit.meetingStatusAfterAudit) >= 0) agg.approved++;
+    else if (REJECTED_SET.indexOf(audit.meetingStatusAfterAudit) >= 0) agg.rejected++;
+  } else {
+    agg.pending++;
   }
 }
-function getQaAuditorEmails() { return QA_AUDITOR_EMAILS.slice(); }
+function aggScore(agg) { return agg.scoreCount ? Math.round(agg.scoreSum / agg.scoreCount) : null; }
+function aggDoneRate(agg) { return agg.auditsDone ? Math.round((agg.held / agg.auditsDone) * 100) : null; }
+function doneTone(rate) { return rate == null ? 'neutral' : (rate >= 75 ? 'ok' : rate >= 55 ? 'warn' : 'bad'); }
 
-// ---- Geography ----
-// City + cluster ("Combined City, Cluster" in the Meeting Tracker sheet).
-// Each Team Lead's team operates in one city; an LRM inherits its TL's city.
-// (In LIVE data, City comes straight from the tracker row — this mapping only
-//  seeds the demo so the join is visible.)
-const CITY_BY_TL = {
-  'vikram.nair@solarsquare.in':  { city: 'Nagpur', cluster: 'Nagpur · Central' },
-  'sneha.patil@solarsquare.in':  { city: 'Nagpur', cluster: 'Nagpur · West' },
-  'imran.khan@solarsquare.in':   { city: 'Pune',   cluster: 'Pune · Hinjewadi' },
-  'divya.reddy@solarsquare.in':  { city: 'Nashik', cluster: 'Nashik · College Rd' },
-};
-function cityForTl(tlEmail) { return CITY_BY_TL[tlEmail] || { city: 'Unassigned', cluster: '—' }; }
-
-// ---- Lighthouse (internal lead console) ----
-// The Meeting Tracker sheet now carries a ready-made "Lead Link" column that deep-links
-// straight to the lead record in Lighthouse, keyed by the row's "Entity id" (a Mongo
-// ObjectId), e.g. .../#/menu/lead/details/<entityId>/ . We surface that link verbatim as
-// row.leadLink and just consume it. lighthouseUrl() builds the same URL from an entity id
-// (used as a fallback / for manual entry where only an id is known).
-const LIGHTHOUSE_BASE = 'https://lighthouse.solarsquare.in/#/menu/lead/details/';
-function lighthouseUrl(entityId) {
-  const id = String(entityId || '').trim();
-  return id ? LIGHTHOUSE_BASE + encodeURIComponent(id) + '/' : '';
-}
-// Fabricate a believable 24-char Mongo ObjectId. The leading 4 bytes are the document
-// timestamp, so seeding from the meeting date makes the demo ids line up with real ones
-// (June-2026 rows start 0x6a…, matching the sample sheet).
-function makeEntityId(rng, dateMs) {
-  const ts = Math.floor((dateMs || Date.now()) / 1000).toString(16).padStart(8, '0').slice(-8);
-  let rest = '';
-  for (let i = 0; i < 16; i++) rest += Math.floor(rng() * 16).toString(16);
-  return ts + rest;
+// Meetings-Done cell: of the audited meetings, how many actually happened, with the rate.
+function DoneCell({ held, outOf, strong }) {
+  const rate = outOf ? Math.round((held / outOf) * 100) : null;
+  const tone = doneTone(rate);
+  const col = tone === 'neutral' ? 'var(--ink-3)' : `var(--${tone})`;
+  return (
+    <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15, gap: 1 }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: strong ? 700 : 600, fontSize: strong ? 14 : 13.5, color: held === 0 ? 'var(--ink-3)' : col }}>
+          {held}<span style={{ color: 'var(--ink-3)', fontWeight: 500 }}>/{outOf || 0}</span>
+        </span>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: col }}>{rate == null ? '—' : rate + '%'}</span>
+      </div>
+    </td>
+  );
 }
 
-// ---- Call recordings ----
-// In LIVE data the recording URL comes straight from the Meeting Tracker sheet's
-// "Recording Link" column, surfaced as row.recordingUrl in getMeetingTracker (blank when
-// the call hasn't been linked yet — the inline player shows "No recording linked").
-// Here we seed a pool of real, streamable samples so the inline player is demonstrable.
-const DEMO_RECORDINGS = Array.from({ length: 16 }, (_, i) =>
-  `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-${i + 1}.mp3`);
-
-// The TEAM LEAD is the auditor: every meeting is audited by the TL of its LRM.
-// So a lead's assigned auditor = that LRM's Team Lead, and a TL's "queue" is simply
-// their own team's pending meetings. (QA_AUDITORS is retained only for legacy mock
-// audit attribution.)
-function auditorForLrm(emp) {
-  return { name: (emp && emp.tlName) || '—', email: (emp && emp.tlEmail) || '' };
-}
-
-// ---- Deterministic PRNG so the demo is stable across reloads ----
-function makeRng(seed) {
-  let s = seed >>> 0;
-  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
-}
-
-// Each agent has a latent skill profile (per-section bias) -> believable patterns.
-function buildMockAudits() {
-  const rng = makeRng(20260604);
-  const pick = arr => arr[Math.floor(rng() * arr.length)];
-  const audits = [];
-  let uid = 1;
-
-  const skill = AGENTS.map((_, i) => {
-    const base = 0.66 + rng() * 0.3; // 0.66 - 0.96
-    return SECTIONS.map((s, si) => {
-      // weakest section varies per agent
-      const dip = (si === (i % 5)) ? -0.18 : 0;
-      const dip2 = (s.key === 'objection') ? -0.06 : 0;
-      return Math.max(0.35, Math.min(0.99, base + dip + dip2 + (rng() - 0.5) * 0.12));
-    });
+// ---- CSV export of the summary (one row per TL, plus city subtotals) ----
+function exportSummaryCSV(cities, grand) {
+  const head = ['City', 'Team Lead', 'Total MS', 'Audits Done', 'Meetings Happened', 'Done %', 'Pending', 'Meeting Approved', 'Meetings Rejected', 'Meeting Score'];
+  const lines = [head.join(',')];
+  const cell = v => (v == null ? '' : '"' + String(v).replace(/"/g, '""') + '"');
+  cities.forEach(c => {
+    c.tls.forEach(t => lines.push([cell(c.city), cell(t.tlName), t.totalMS, t.auditsDone, t.held, aggDoneRate(t) == null ? '' : aggDoneRate(t), t.pending, t.approved, t.rejected, aggScore(t) == null ? '' : aggScore(t)].join(',')));
+    lines.push([cell(c.city), cell('— City total —'), c.totalMS, c.auditsDone, c.held, aggDoneRate(c) == null ? '' : aggDoneRate(c), c.pending, c.approved, c.rejected, aggScore(c) == null ? '' : aggScore(c)].join(','));
   });
+  lines.push([cell('ALL CITIES'), cell('Grand total'), grand.totalMS, grand.auditsDone, grand.held, aggDoneRate(grand) == null ? '' : aggDoneRate(grand), grand.pending, grand.approved, grand.rejected, aggScore(grand) == null ? '' : aggScore(grand)].join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'city-tl-summary.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 
-  const today = new Date('2026-06-04');
+// small numeric cell
+function NumCell({ value, tone, strong }) {
+  const col = tone ? `var(--${tone})` : 'var(--ink)';
+  return (
+    <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center', fontFamily: 'var(--font-mono)', fontWeight: strong ? 700 : 600, fontSize: strong ? 14 : 13.5, color: value === 0 && !strong ? 'var(--ink-3)' : col }}>
+      {value == null ? '—' : value}
+    </td>
+  );
+}
 
-  const genAnswers = (skillRow) => {
-    const answers = {};
-    SECTIONS.forEach((s, si) => {
-      const p = skillRow[si];
-      s.items.forEach((_, ii) => {
-        const id = `${s.key}-${ii}`;
-        const r = rng();
-        if (r > 0.93 && s.items.length > 2) answers[id] = 'NA';
-        else answers[id] = rng() < p ? 'Yes' : 'No';
-      });
-    });
-    return answers;
-  };
+function SummaryView({ audits, meetings, threshold }) {
+  const { fmtDate, cityForTl, AGENTS } = window.QA;
+  const todayISO = '2026-06-08';
+  const [f, setF] = useStateSm({ city: '', tl: '', type: '', from: '', to: '' });
+  const set = (k, v) => setF(o => ({ ...o, [k]: v }));
+  const [expanded, setExpanded] = useStateSm({}); // city -> bool (undefined = open)
+  const isOpen = c => expanded[c] !== false;
+  const toggle = c => setExpanded(o => ({ ...o, [c]: !isOpen(c) }));
 
+  // LRM email -> employee (normalized key so case/whitespace differences still match)
+  const empByEmail = useMemoSm(() => {
+    const m = {}; AGENTS.forEach(a => { if (a.email) m[String(a.email).trim().toLowerCase()] = a; }); return m;
+  }, [AGENTS]);
 
-  AGENTS.forEach((agent, ai) => {
-    const n = 4 + Math.floor(rng() * 6); // 4-9 leads each
-    for (let k = 0; k < n; k++) {
-      const answers = genAnswers(skill[ai]);
-      const { sectionPct, overall } = scoreAudit(answers);
-
-      const daysAgo = Math.floor(rng() * 75);
-      const d = new Date(today); d.setDate(d.getDate() - daysAgo);
-      const md = new Date(d); md.setDate(md.getDate() + 1 + Math.floor(rng() * 6));
-
-      // The TEAM LEAD of the LRM is the first-line auditor in our model.
-      const auditor = { name: agent.tlName, email: agent.tlEmail, role: 'TL' };
-      const mStatus = pick(['Scheduled', 'Completed', 'Completed', 'No-show', 'Rescheduled']);
-      const mAfter = overall >= 80
-        ? pick(['Confirmed', 'Completed', 'Confirmed', 'Rescheduled'])
-        : pick(['Rescheduled', 'Dropped', 'Confirmed', 'No-show']);
-
-      const rec = {
-        id: uid++,
-        agentName: agent.name, agentEmail: agent.email,
-        tlName: agent.tlName, tlEmail: agent.tlEmail,
-        mgrName: agent.mgrName, mgrEmail: agent.mgrEmail,
-        adosName: agent.adosName, adosEmail: agent.adosEmail,
-        meetingDate: md.toISOString().slice(0, 10),
-        leadId: 'LMH' + (150000 + Math.floor(rng() * 49999)),
-        meetingStatus: mStatus, meetingStatusAfterAudit: mAfter,
-        auditorName: auditor.name, auditorEmail: auditor.email, auditorRole: auditor.role || 'TL',
-        callDate: d.toISOString().slice(0, 10), ts: d.getTime(),
-        answers, sectionPct, overall,
-        notes: buildNotes(rng, sectionPct),
-      };
-      audits.push(rec);
+  // Resolve a meeting's Team Lead. The backend (meetings.js) already joins each LRM to its
+  // TL with a normalized match and returns it as assignedAuditorName/Email (TL = auditor),
+  // so trust that first; fall back to a normalized client-side lookup; else Unassigned.
+  const resolveTL = React.useCallback((m) => {
+    if (m.assignedAuditorName || m.assignedAuditorEmail) {
+      return { tlName: m.assignedAuditorName || window.QA.nameFromEmail(m.assignedAuditorEmail), tlEmail: m.assignedAuditorEmail || '' };
     }
-  });
-  // QA calibration overlay — a QA Auditor independently re-audits ~1 in 3 of the leads a TL
-  // already scored, producing the TL-vs-QA pairs the Calibration view compares. Answers are
-  // jittered so the two auditors realistically agree on most points and diverge on a few.
-  const tlAudits = audits.filter(a => a.auditorRole === 'TL');
-  tlAudits.forEach((base, i) => {
-    if (i % 3 !== 0) return;
-    const qa = QA_AUDITORS[((i / 3) | 0) % QA_AUDITORS.length];
-    const answers = { ...base.answers };
-    PARAMS.forEach((p, pi) => { if ((i + pi) % 7 === 0) answers[p.id] = (rng() < 0.5 ? 'Yes' : 'No'); });
-    const sc = scoreAudit(answers);
-    const d = new Date(base.ts); d.setDate(d.getDate() + 1 + Math.floor(rng() * 3));
-    audits.push({
-      ...base,
-      id: uid++,
-      auditorName: qa.name, auditorEmail: qa.email, auditorRole: 'QA',
-      callDate: d.toISOString().slice(0, 10), ts: d.getTime(),
-      answers, sectionPct: sc.sectionPct, overall: sc.overall,
-      notes: buildNotes(rng, sc.sectionPct),
+    const emp = empByEmail[String(m.lrmEmail || '').trim().toLowerCase()];
+    if (emp && (emp.tlName || emp.tlEmail)) return { tlName: emp.tlName || window.QA.nameFromEmail(emp.tlEmail), tlEmail: emp.tlEmail || '' };
+    return { tlName: 'Unassigned', tlEmail: '' };
+  }, [empByEmail]);
+
+  // leadId -> audit (most recent wins; audits already sorted desc by ts)
+  const auditByLead = useMemoSm(() => {
+    const m = {};
+    audits.forEach(a => { if (a.leadId != null && m[a.leadId] == null) m[a.leadId] = a; });
+    return m;
+  }, [audits]);
+
+  // option lists
+  const cityOpts = useMemoSm(() => Array.from(new Set(meetings.map(m => m.city))).filter(Boolean).sort(), [meetings]);
+  const tlOpts = useMemoSm(() => {
+    const m = {};
+    meetings.forEach(mt => {
+      const { tlName, tlEmail } = resolveTL(mt);
+      const key = tlEmail || tlName;
+      if (key && (!f.city || mt.city === f.city)) m[key] = tlName;
     });
-  });
-  audits.sort((a, b) => b.ts - a.ts);
-  return audits;
-}
+    return Object.entries(m).map(([email, name]) => ({ email, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [meetings, resolveTL, f.city]);
+  const typeOpts = useMemoSm(() => Array.from(new Set(meetings.map(m => m.meetingType))).filter(Boolean).sort(), [meetings]);
 
-function buildNotes(rng, sectionPct) {
-  const weakest = SECTIONS.reduce((w, s) => (sectionPct[s.key] ?? 100) < (sectionPct[w.key] ?? 100) ? s : w, SECTIONS[0]);
-  const strengthBank = [
-    'Warm, confident greeting and clear self-introduction.',
-    'Strong value framing — tied solar savings to the customer\u2019s bill.',
-    'Handled the pricing question with full transparency.',
-    'Excellent rapport; customer was engaged throughout.',
-    'Logged the lead cleanly in CRM with correct tagging.',
-  ];
-  const improveBank = {
-    opening: 'Set the reference for the call earlier so the customer knows why we\u2019re calling.',
-    selling: 'Spend more time on the value proposition before moving to qualification.',
-    qualification: 'Missed confirming roof ownership and meter phase — capture these every time.',
-    objection: 'Address objections directly instead of deflecting to the site visit.',
-    closing: 'Confirm the appointment slot explicitly and repeat it back to the customer.',
-  };
-  const actionBank = {
-    opening: 'Practice the opening script; review 2 recorded calls with TL.',
-    selling: 'Shadow a top performer on value-prop delivery this week.',
-    qualification: 'Use the qualification checklist on the next 10 calls.',
-    objection: 'Attend the objection-handling refresher session.',
-    closing: 'Role-play closing & appointment confirmation in next 1:1.',
-  };
-  return {
-    strengths: strengthBank[Math.floor(rng() * strengthBank.length)],
-    improvements: improveBank[weakest.key],
-    actionItems: actionBank[weakest.key],
-  };
-}
+  // filtered meeting rows
+  const rows = useMemoSm(() => meetings.filter(m => {
+    if (f.city && m.city !== f.city) return false;
+    if (f.type && m.meetingType !== f.type) return false;
+    if (f.tl) { const { tlEmail, tlName } = resolveTL(m); if ((tlEmail || tlName) !== f.tl) return false; }
+    if (f.from && m.scheduleISO < f.from) return false;
+    if (f.to && m.scheduleISO > f.to) return false;
+    return true;
+  }), [meetings, f, resolveTL]);
 
-// ---- Meeting Tracker ----
-// Mirrors the "meeting tracker" Google Sheet: one row per meeting scheduled.
-// Columns: lead_id, meeting_type, "Combined City, Cluster", meeting_schedule_date,
-//          assigned_lrm_email, assigned_lrm.
-// We seed it so it JOINS to the audits: every audited lead appears here (=> "Audits
-// Done"), plus extra un-audited meetings (=> "Pending"). City comes from the row;
-// TL is resolved from the LRM via the employee directory.
-function buildMeetingTracker(audits) {
-  const rng = makeRng(76543210);
-  const byEmail = {};
-  AGENTS.forEach(a => { byEmail[a.email] = a; });
-  const today = new Date('2026-06-08');
-  const fmtSched = (d, h) => {
-    const dd = new Date(d); dd.setHours(h, [0, 30][Math.floor(rng() * 2)], 0, 0);
-    return dd.toISOString();
-  };
-  const meetingTypes = ['fresh_meeting', 'fresh_meeting', 'fresh_meeting', 're_meeting'];
-  const rows = [];
-  let seq = 100000;
-
-  // 1) every audited lead -> a tracker row (these count as "Audits Done")
-  audits.forEach(a => {
-    const emp = byEmail[a.agentEmail] || {};
-    const geo = cityForTl(emp.tlEmail);
-    const au = auditorForLrm(emp);
-    const sched = a.meetingDate || a.callDate;
-    const entityId = makeEntityId(rng, Date.parse(sched + 'T00:00:00Z'));
-    rows.push({
-      leadId: a.leadId,
-      entityId, leadLink: lighthouseUrl(entityId),
-      meetingType: 'fresh_meeting',
-      city: geo.city, cluster: geo.cluster,
-      scheduleDate: sched,
-      lrmEmail: a.agentEmail, lrmName: a.agentName,
-      assignedAuditorEmail: au.email, assignedAuditorName: au.name,
-      recordingUrl: DEMO_RECORDINGS[Math.floor(rng() * DEMO_RECORDINGS.length)],
+  // roll up: City -> TL
+  const { cities, grand } = useMemoSm(() => {
+    const cityMap = {};
+    const grand = blankAgg();
+    rows.forEach(m => {
+      const { tlName, tlEmail } = resolveTL(m);
+      const audit = auditByLead[m.leadId] || null;
+      const city = m.city || 'Unassigned';
+      const c = cityMap[city] || (cityMap[city] = { city, tls: {}, ...blankAgg() });
+      const t = c.tls[tlEmail || tlName] || (c.tls[tlEmail || tlName] = { tlName, tlEmail, ...blankAgg() });
+      addToAgg(t, audit, m); addToAgg(c, audit, m); addToAgg(grand, audit, m);
     });
-  });
+    const cities = Object.values(cityMap).map(c => ({
+      ...c, tls: Object.values(c.tls).sort((a, b) => b.pending - a.pending || b.totalMS - a.totalMS),
+    })).sort((a, b) => b.totalMS - a.totalMS);
+    return { cities, grand };
+  }, [rows, resolveTL, auditByLead]);
 
-  // 2) extra meetings with NO audit yet (these are the "Pending" backlog)
-  AGENTS.forEach(agent => {
-    const geo = cityForTl(agent.tlEmail);
-    const pend = 2 + Math.floor(rng() * 6); // 2-7 pending each
-    for (let k = 0; k < pend; k++) {
-      const daysAhead = Math.floor(rng() * 8) - 2; // mostly upcoming, some just-passed
-      const d = new Date(today); d.setDate(d.getDate() + daysAhead);
-      const leadId = 'LMH' + (seq++);
-      const au = auditorForLrm(agent);
-      const entityId = makeEntityId(rng, d.getTime());
-      // Recording Link can be blank in the sheet until the call is linked — mirror that.
-      const hasRec = rng() > 0.18;
-      rows.push({
-        leadId,
-        entityId, leadLink: lighthouseUrl(entityId),
-        meetingType: meetingTypes[Math.floor(rng() * meetingTypes.length)],
-        city: geo.city, cluster: geo.cluster,
-        scheduleDate: fmtSched(d, 8 + Math.floor(rng() * 9)),
-        lrmEmail: agent.email, lrmName: agent.name,
-        assignedAuditorEmail: au.email, assignedAuditorName: au.name,
-        recordingUrl: hasRec ? DEMO_RECORDINGS[Math.floor(rng() * DEMO_RECORDINGS.length)] : '',
-      });
-    }
-  });
+  const coverage = grand.totalMS ? Math.round((grand.auditsDone / grand.totalMS) * 100) : 0;
+  const doneRate = aggDoneRate(grand);
 
-  // 3) Meeting outcome — did the scheduled meeting actually get DONE?
-  // Future-dated meetings are still 'Scheduled' (not yet due). Past meetings resolve to a
-  // held/missed outcome (~72% completed). In LIVE data this comes straight from the
-  // tracker's "Meeting Status" column; here we seed it deterministically.
-  const outcomeToday = '2026-06-08';
-  const outcomePool = ['Completed', 'Completed', 'Completed', 'Completed', 'Completed',
-    'Completed', 'Completed', 'No-show', 'Rescheduled', 'Cancelled'];
-  rows.forEach(r => {
-    const iso = (r.scheduleDate || '').slice(0, 10);
-    r.meetingStatus = iso > outcomeToday ? 'Scheduled' : outcomePool[Math.floor(rng() * outcomePool.length)];
-    // "Meeting Done Date" — stamped only when the meeting was actually held. Its presence is
-    // the real completion signal in production; here it mirrors a 'Completed' outcome.
-    r.meetingDoneDate = r.meetingStatus === 'Completed' ? iso : '';
-    r.meetingDoneISO = r.meetingDoneDate;
-  });
+  const quickRange = (kind) => {
+    if (kind === 'all') return setF(o => ({ ...o, from: '', to: '' }));
+    const t = new Date(todayISO + 'T00:00:00');
+    let from = new Date(t);
+    if (kind === 'week') from.setDate(t.getDate() - 6);
+    if (kind === 'month') from.setDate(t.getDate() - 29);
+    setF(o => ({ ...o, from: from.toISOString().slice(0, 10), to: todayISO }));
+  };
 
-  return rows;
+  const Th = ({ children, w }) => <th style={{ ...window.thStyle, textAlign: 'center', width: w }}>{children}</th>;
+
+  return (
+    <div>
+      <ViewHeader title="City & TL Summary"
+        sub="Audit coverage across every scheduled meeting — by city and team lead. Pending = meetings still waiting for a QA audit."
+        action={<div style={{ display: 'flex', gap: 10 }}>
+          <Button variant="ghost" size="sm" onClick={() => exportSummaryCSV(cities, grand)} disabled={!rows.length} style={{ opacity: rows.length ? 1 : 0.5 }}>↓ Export CSV</Button>
+        </div>} />
+
+      {/* KPI band */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }} className="kpi-grid">
+        <StatCard label="Total MS" value={grand.totalMS} tone="primary" sub="meetings scheduled" />
+        <StatCard label="Audits Done" value={grand.auditsDone} tone="ok" sub={grand.totalMS ? coverage + '% coverage' : '—'} />
+        <StatCard label="Meetings Done" value={grand.held} tone={doneTone(doneRate) === 'neutral' ? 'primary' : doneTone(doneRate)} sub={doneRate == null ? 'of 0 audited' : `${doneRate}% of ${grand.auditsDone} audited`} />
+        <StatCard label="Pending" value={grand.pending} tone={grand.pending ? 'warn' : 'ok'} sub="awaiting audit" />
+        <StatCard label="Avg meeting score" value={aggScore(grand) == null ? '—' : aggScore(grand) + '%'} tone={aggScore(grand) == null ? 'neutral' : (aggScore(grand) >= threshold ? 'ok' : 'warn')} sub={`approved ${grand.approved} · rejected ${grand.rejected}`} />
+      </div>
+
+      {/* filters */}
+      <Card title="Filters" style={{ marginBottom: 'var(--gap)' }}
+        action={<div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {[['week', 'This week'], ['month', 'This month'], ['all', 'All time']].map(([k, lbl]) =>
+            <button key={k} type="button" onClick={() => quickRange(k)} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', background: 'none', border: 'none' }}>{lbl}</button>)}
+          <button type="button" onClick={() => setF({ city: '', tl: '', type: '', from: '', to: '' })} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--primary-strong)', background: 'none', border: 'none' }}>Reset</button>
+        </div>}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }} className="filter-grid">
+          <Field label="City">
+            <Select value={f.city} onChange={v => setF(o => ({ ...o, city: v, tl: '' }))}>
+              <option value="">All cities</option>
+              {cityOpts.map(c => <option key={c} value={c}>{c}</option>)}
+            </Select>
+          </Field>
+          <Field label="Team Lead">
+            <Select value={f.tl} onChange={v => set('tl', v)}>
+              <option value="">All TLs</option>
+              {tlOpts.map(t => <option key={t.email} value={t.email}>{t.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="Meeting type">
+            <Select value={f.type} onChange={v => set('type', v)}>
+              <option value="">All types</option>
+              {typeOpts.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+            </Select>
+          </Field>
+          <Field label="From"><TextInput type="date" value={f.from} onChange={v => set('from', v)} /></Field>
+          <Field label="To"><TextInput type="date" value={f.to} onChange={v => set('to', v)} /></Field>
+        </div>
+      </Card>
+
+      {/* summary table */}
+      <Card title="City & Team Lead breakdown" subtitle="Click a city to expand its team leads. Sorted by volume; TLs by pending backlog." pad={false}>
+        {cities.length ? (
+          <div style={{ overflowX: 'auto' }}>
+            <Table>
+              <thead><tr>
+                <th style={{ ...window.thStyle, left: 0 }}>City / Team Lead</th>
+                <Th>Total MS</Th><Th>Audits Done</Th><Th>Meetings Done</Th><Th>Pending</Th>
+                <Th>Approved</Th><Th>Rejected</Th><Th>Meeting Score</Th>
+              </tr></thead>
+              <tbody>
+                {cities.map(c => {
+                  const open = isOpen(c.city);
+                  const cScore = aggScore(c);
+                  return (
+                    <React.Fragment key={c.city}>
+                      {/* city header row */}
+                      <tr onClick={() => toggle(c.city)} style={{ cursor: 'pointer', background: 'var(--surface-2)' }}>
+                        <td style={{ ...window.tdStyle, borderBottom: '1px solid var(--line)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                            <span style={{ fontSize: 10, color: 'var(--ink-3)', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', display: 'inline-block', width: 10 }}>▶</span>
+                            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14 }}>{c.city}</span>
+                            <Badge tone="neutral" mono>{c.tls.length} TL{c.tls.length === 1 ? '' : 's'}</Badge>
+                          </div>
+                        </td>
+                        <NumCell value={c.totalMS} strong />
+                        <NumCell value={c.auditsDone} strong tone="ok" />
+                        <DoneCell held={c.held} outOf={c.auditsDone} strong />
+                        <NumCell value={c.pending} strong tone={c.pending ? 'warn' : 'ink-3'} />
+                        <NumCell value={c.approved} strong tone="ok" />
+                        <NumCell value={c.rejected} strong tone={c.rejected ? 'bad' : 'ink-3'} />
+                        <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center', borderBottom: '1px solid var(--line)' }}>
+                          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: cScore == null ? 'var(--ink-3)' : `var(--${scoreTone(cScore, threshold) === 'neutral' ? 'ink' : scoreTone(cScore, threshold)})` }}>{cScore == null ? '—' : cScore + '%'}</span>
+                        </td>
+                      </tr>
+                      {/* TL rows */}
+                      {open && c.tls.map(t => {
+                        const tScore = aggScore(t);
+                        return (
+                          <tr key={(t.tlEmail || t.tlName)} style={{ transition: 'background 0.12s' }}
+                            onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
+                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                            <td style={window.tdStyle}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 11, paddingLeft: 19 }}>
+                                <Avatar name={t.tlName} size={28} />
+                                <span style={{ fontWeight: 600, fontSize: 13.5 }}>{t.tlName}</span>
+                              </div>
+                            </td>
+                            <NumCell value={t.totalMS} />
+                            <NumCell value={t.auditsDone} tone="ok" />
+                            <DoneCell held={t.held} outOf={t.auditsDone} />
+                            <td style={{ ...window.tdStyle, textAlign: 'center' }}>
+                              {t.pending ? <Badge tone="warn" mono>{t.pending}</Badge> : <span className="tnum" style={{ color: 'var(--ink-3)', fontFamily: 'var(--font-mono)', fontSize: 13.5 }}>0</span>}
+                            </td>
+                            <NumCell value={t.approved} tone="ok" />
+                            <NumCell value={t.rejected} tone={t.rejected ? 'bad' : null} />
+                            <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center', fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13.5, color: tScore == null ? 'var(--ink-3)' : `var(--${scoreTone(tScore, threshold) === 'neutral' ? 'ink' : scoreTone(tScore, threshold)})` }}>{tScore == null ? '—' : tScore + '%'}</td>
+                          </tr>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={{ background: 'var(--primary-softer)' }}>
+                  <td style={{ ...window.tdStyle, borderTop: '2px solid var(--line)', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13.5 }}>All cities · Grand total</td>
+                  <NumCell value={grand.totalMS} strong />
+                  <NumCell value={grand.auditsDone} strong tone="ok" />
+                  <DoneCell held={grand.held} outOf={grand.auditsDone} strong />
+                  <NumCell value={grand.pending} strong tone={grand.pending ? 'warn' : 'ink-3'} />
+                  <NumCell value={grand.approved} strong tone="ok" />
+                  <NumCell value={grand.rejected} strong tone={grand.rejected ? 'bad' : 'ink-3'} />
+                  <td className="tnum" style={{ ...window.tdStyle, textAlign: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>{aggScore(grand) == null ? '—' : aggScore(grand) + '%'}</td>
+                </tr>
+              </tfoot>
+            </Table>
+          </div>
+        ) : <EmptyState title="No meetings match these filters" body="Try widening the date range or clearing filters." />}
+      </Card>
+
+      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.6 }}>
+        <b>Total MS</b> = meetings in the tracker · <b>Audits Done</b> = those with a matching QA audit (joined on lead ID) · <b>Meetings Done</b> = of the audited meetings, how many actually happened — Meeting Done Date filled / status Completed (held ÷ Audits Done) ·
+        <b> Pending</b> = Total MS − Audits Done · <b>Approved / Rejected</b> = meeting status set after the audit ·
+        <b> Meeting Score</b> = average audit score across audited meetings.
+      </div>
+    </div>
+  );
 }
 
-// derive a display name from an email local-part: "laxshmi.iyer@x" -> "Laxshmi Iyer"
-function nameFromEmail(email) {
-  if (!email) return '';
-  return email.split('@')[0].split(/[._]+/).filter(Boolean)
-    .map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
-}
-// Simulated signed-in session. Team Leads are the auditors, so the demo logs in as a TL —
-// their queue is their own team's pending meetings. (In LIVE Apps Script this is the
-// real Google account of whoever opens the app.)
-const SESSION = { email: 'vikram.nair@solarsquare.in', role: 'Team Lead' };
-SESSION.name = nameFromEmail(SESSION.email);
-
-const __MOCK_AUDITS = buildMockAudits();
-
-window.QA = {
-  SECTIONS, PARAMS, PASS_DEFAULT, scoreAudit, normItem, nameFromEmail, SESSION,
-  MANAGERS, TEAM_LEADS, AGENTS, QA_AUDITORS, ADOS_LIST,
-  ROLE_LABEL, roleForEmail, setQaAuditorEmails, getQaAuditorEmails,
-  CITY_BY_TL, cityForTl, lighthouseUrl, LIGHTHOUSE_BASE,
-  MOCK_AUDITS: __MOCK_AUDITS,
-  MEETING_TRACKER: buildMeetingTracker(__MOCK_AUDITS),
-  fmtDate: (iso) => {
-    if (!iso) return '\u2014';
-    const d = new Date(iso + 'T00:00:00');
-    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-  },
-};
+Object.assign(window, { SummaryView, exportSummaryCSV });

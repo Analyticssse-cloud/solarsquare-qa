@@ -1,350 +1,415 @@
-// app.jsx — shell, navigation, audit store, tweaks. Mounts to #root.
-const { useState: useStateApp, useEffect: useEffectApp, useRef: useRefApp } = React;
+// data.js — domain model, scoring logic, and realistic mock audits.
+// Exported on window for the other babel scripts.
 
-const ACCENTS = [
-  { hex: '#2f6bf0', hue: 255 }, // solar blue (default)
-  { hex: '#0e87b4', hue: 218 }, // azure
-  { hex: '#15998c', hue: 186 }, // teal
-  { hex: '#7a5ae0', hue: 292 }, // violet
-  { hex: '#e08a1e', hue: 70  }, // sun amber
-];
-const FONTS = {
-  grotesk: { display: "'Space Grotesk', sans-serif", ui: "'Plus Jakarta Sans', sans-serif" },
-  jakarta: { display: "'Plus Jakarta Sans', sans-serif", ui: "'Plus Jakarta Sans', sans-serif" },
-};
-
-const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "accent": "#2f6bf0",
-  "headingFont": "grotesk",
-  "threshold": 80,
-  "density": "regular",
-  "dark": false
-}/*EDITMODE-END*/;
-
-const ICONS = {
-  summary: <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 16.5V8 M8 16.5V4 M12.5 16.5v-5 M3 16.5h13" /><circle cx="14.5" cy="6.5" r="2.2" /></g>,
-  audit: <path d="M4 4.5A1.5 1.5 0 015.5 3H11l5 5v8.5A1.5 1.5 0 0114.5 18h-9A1.5 1.5 0 014 16.5v-12z M11 3v5h5 M7.5 11.5l1.6 1.6L13 9.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />,
-  analytics: <path d="M4 16V9 M9 16V5 M14 16v-4 M3 16.5h13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />,
-  performance: <g fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="10" cy="7.5" r="3.2" /><path d="M4.5 16.5c0-3 2.6-4.7 5.5-4.7s5.5 1.7 5.5 4.7" strokeLinecap="round" /></g>,
-  calibration: <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M10 3.2v13.6 M6.5 16.8h7 M4.6 6.6l-2.1 4.2a2.5 2.5 0 004.2 0L4.6 6.6z M15.4 6.6l-2.1 4.2a2.5 2.5 0 004.2 0l-2.1-4.2z M4.6 6.6L10 5l5.4 1.6" /></g>,
-};
-
-const NAV = [
-  { key: 'summary', label: 'Summary', desc: 'City & TL overview' },
-  { key: 'audit', label: 'New Audit', desc: 'Score a call' },
-  { key: 'analytics', label: 'Analytics', desc: 'Team reporting' },
-  { key: 'calibration', label: 'Calibration', desc: 'TL vs QA scores' },
-  { key: 'performance', label: 'My Performance', desc: 'LRM scorecard' },
+// ---- Evaluation framework: 5 sections, 17 criteria ----
+const SECTIONS = [
+  { key: 'opening', name: 'Opening', short: 'Open', items: [
+    { label: 'Greeting & self-introduction', eg: ['Namaste se Kapil ji main shankar nagar office se laxshmi bol rahi hun'] },
+    { label: 'Stated purpose / set reference for the call', eg: ['Apne solar main interest show kiya tha', 'Apka roof survery hua tha uska design ready hai'] },
+  ]},
+  { key: 'selling', name: 'Selling', short: 'Sell', items: [
+    'Briefly explained SolarSquare',
+    'Explained the benefits of the site visit',
+    { label: 'Value proposition', eg: ['Topcon & site visit'] },
+    { label: 'End to end service', eg: ['from design to installation to subsidy'] },
+    'Insurance & warranty info',
+  ]},
+  { key: 'qualification', name: 'Qualification', short: 'Qual', items: [
+    'Captured monthly electricity bill',
+    'Confirmed roof ownership',
+    'Roof Type',
+    'Identified meter type & phases',
+    'Construction status',
+    'Evaluated shadow / obstruction',
+  ]},
+  { key: 'objection', name: 'Objection Handling', short: 'Obj', items: [
+    'Clear, concise answers & redirection',
+  ]},
+  { key: 'closing', name: 'Closing', short: 'Close', items: [
+    'Set the appointment Time',
+    'Confirmed Appointment date',
+    'Correct CRM logging & Disposition',
+  ]},
 ];
 
-function Sidebar({ active, onNav, count, session, onSignOut, signInEnabled }) {
-  const who = (session && (session.name || session.email)) || 'Signed in';
-  const role = (session && session.role) || ((session && session.email) ? window.QA.roleForEmail(session.email) : '');
-  const sub = (window.QA.ROLE_LABEL && window.QA.ROLE_LABEL[role]) || 'Team Lead';
-  return (
-    <aside className="ss-sidebar" style={{
-      width: 252, flex: '0 0 252px', background: 'var(--surface)', borderRight: '1px solid var(--line)',
-      display: 'flex', flexDirection: 'column', height: '100%',
-    }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 9, padding: '20px 20px 20px' }}>
-        <img src="/solarsquare-logo.png" alt="SolarSquare" style={{ width: 124, height: 'auto', display: 'block' }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ width: 18, height: 2, borderRadius: 2, background: 'var(--primary)', flex: '0 0 auto' }} />
-          <span style={{ fontSize: 11, color: 'var(--ink-2)', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase' }}>Quality Systems</span>
-        </div>
-      </div>
+// normalize an item to { label, eg }
+function normItem(item) { return typeof item === 'string' ? { label: item, eg: [] } : { eg: [], ...item }; }
 
-      <nav className="ss-nav" style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '0 12px', flex: 1 }}>
-        {NAV.map(n => {
-          const on = active === n.key;
-          return (
-            <button key={n.key} onClick={() => onNav(n.key)} style={{
-              display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 'var(--radius-sm)',
-              border: 'none', background: on ? 'var(--primary-soft)' : 'transparent', textAlign: 'left',
-              color: on ? 'var(--primary-strong)' : 'var(--ink-2)', transition: 'background 0.15s, color 0.15s', width: '100%',
-            }}
-              onMouseEnter={e => { if (!on) e.currentTarget.style.background = 'var(--surface-2)'; }}
-              onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent'; }}>
-              <svg width="20" height="20" viewBox="0 0 20 20" style={{ flex: '0 0 auto', color: on ? 'var(--primary)' : 'var(--ink-3)' }}>{ICONS[n.key]}</svg>
-              <span style={{ flex: 1 }}>
-                <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, lineHeight: 1.2 }}>{n.label}</span>
-                <span style={{ display: 'block', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 500 }}>{n.desc}</span>
-              </span>
-              {n.key === 'analytics' && <Badge tone={on ? 'primary' : 'neutral'} mono>{count}</Badge>}
-            </button>
-          );
-        })}
-      </nav>
+// flat list of all 17 params with section ref
+const PARAMS = [];
+SECTIONS.forEach((s, si) => s.items.forEach((item, ii) => {
+  const it = normItem(item);
+  PARAMS.push({ id: `${s.key}-${ii}`, label: it.label, eg: it.eg, section: s.key, sectionName: s.name, sectionIdx: si });
+}));
 
-      <div className="ss-userbox" style={{ padding: 14, margin: 12, borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)', border: '1px solid var(--line-soft)', display: 'flex', alignItems: 'center', gap: 11 }}>
-        <Avatar name={who} size={34} />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{who}</div>
-          <div style={{ fontSize: 11, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub}</div>
-        </div>
-        {signInEnabled
-          ? <button onClick={onSignOut} title="Sign out" aria-label="Sign out" style={{
-              flex: '0 0 auto', width: 30, height: 30, display: 'grid', placeItems: 'center',
-              border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface)', color: 'var(--ink-3)',
-            }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--bad)'; e.currentTarget.style.borderColor = 'var(--bad)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--ink-3)'; e.currentTarget.style.borderColor = 'var(--line)'; }}>
-              <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 5.5V4.5A1.5 1.5 0 019.5 3h5A1.5 1.5 0 0116 4.5v11a1.5 1.5 0 01-1.5 1.5h-5A1.5 1.5 0 018 15.5v-1 M11 10H3.5 M6 7l-3 3 3 3" /></svg>
-            </button>
-          : <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--ok)', flex: '0 0 auto' }} title="Online" />}
-      </div>
-    </aside>
-  );
+const PASS_DEFAULT = 80;
+
+// ---- Scoring ----
+// Each section scored as % of Yes among applicable (non-NA) items.
+// Overall = mean of the 5 section percentages (each section weighted equally, "Max 5 pts").
+function scoreAudit(answers) {
+  // answers: { [paramId]: 'Yes'|'No'|'NA' }
+  const sectionPct = {};
+  SECTIONS.forEach(s => {
+    const ids = s.items.map((_, ii) => `${s.key}-${ii}`);
+    let applicable = 0, yes = 0;
+    ids.forEach(id => {
+      const a = answers[id];
+      if (a === 'NA' || a == null) return;
+      applicable++;
+      if (a === 'Yes') yes++;
+    });
+    sectionPct[s.key] = applicable === 0 ? null : Math.round((yes / applicable) * 100);
+  });
+  const vals = SECTIONS.map(s => sectionPct[s.key]).filter(v => v != null);
+  const overall = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
+  return { sectionPct, overall };
 }
 
-function App() {
-  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [active, setActive] = useStateApp('summary');
-  const [audits, setAudits] = useStateApp([]);
-  const [meetings, setMeetings] = useStateApp([]);
-  const [agents, setAgents] = useStateApp([]);
-  const authApi = (window.QA && window.QA.auth) || { enabled: false, init: () => Promise.resolve(), isAuthorized: () => false };
-  const [gated, setGated] = useStateApp(true); // fail closed until config resolves
-  const [session, setSession] = useStateApp(authApi.session || { name: '', email: '' });
+// ---- People ----
+// Hierarchy: LRM (agent) -> Team Lead -> ZSM (manager) -> ADOS
+const ADOS_LIST = [
+  { name: 'Sanjay Kapoor', email: 'sanjay.kapoor@solarsquare.in' },
+  { name: 'Ritu Malhotra', email: 'ritu.malhotra@solarsquare.in' },
+];
+const MANAGERS = [
+  { name: 'Rohan Mehta', email: 'rohan.mehta@solarsquare.in', ados: 0 },
+  { name: 'Aditi Sharma', email: 'aditi.sharma@solarsquare.in', ados: 1 },
+];
+const TEAM_LEADS = [
+  { name: 'Vikram Nair', email: 'vikram.nair@solarsquare.in', mgr: 0 },
+  { name: 'Sneha Patil', email: 'sneha.patil@solarsquare.in', mgr: 0 },
+  { name: 'Imran Khan', email: 'imran.khan@solarsquare.in', mgr: 1 },
+  { name: 'Divya Reddy', email: 'divya.reddy@solarsquare.in', mgr: 1 },
+];
+const AGENTS = [
+  { name: 'Aarav Joshi',     tl: 0 }, { name: 'Priya Kulkarni',  tl: 0 },
+  { name: 'Karthik Iyer',    tl: 1 }, { name: 'Neha Bansal',     tl: 1 },
+  { name: 'Sahil Verma',     tl: 2 }, { name: 'Ananya Das',      tl: 2 },
+  { name: 'Rahul Pillai',    tl: 3 }, { name: 'Meera Chauhan',   tl: 3 },
+  { name: 'Tushar Gupta',    tl: 0 }, { name: 'Fatima Sheikh',   tl: 2 },
+].map(a => {
+  const slug = a.name.toLowerCase().replace(/[^a-z]+/g, '.');
+  const tl = TEAM_LEADS[a.tl];
+  const mgr = MANAGERS[tl.mgr];
+  const ados = ADOS_LIST[mgr.ados];
+  return {
+    name: a.name,
+    email: `${slug}@solarsquare.in`,
+    tlName: tl.name, tlEmail: tl.email,
+    mgrName: mgr.name, mgrEmail: mgr.email,
+    adosName: ados.name, adosEmail: ados.email,
+  };
+});
+const QA_AUDITORS = [
+  { name: 'Pooja Menon',  email: 'pooja.menon@solarsquare.in' },
+  { name: 'Arjun Saxena', email: 'arjun.saxena@solarsquare.in' },
+  { name: 'Kavya Rao',    email: 'kavya.rao@solarsquare.in' },
+];
 
-  // phase: 'booting' (resolving config) | 'login' | 'denied' | 'loading' | 'ready'
-  const [phase, setPhase] = useStateApp('booting');
-  const [busy, setBusy] = useStateApp(false);
+// ---- Auditor roles ----
+// Two kinds of auditor sign in: a lead's Team Lead (TL) and a dedicated QA Auditor who
+// independently re-audits leads across every team. A QA Auditor is identified purely by
+// email; this list seeds the demo and is overridden at runtime from /api/config
+// (QA_AUDITOR_EMAILS env) so adding a new auditor never needs a code change.
+let QA_AUDITOR_EMAILS = QA_AUDITORS.map(a => a.email.toLowerCase()).concat(['samapti.pal@solarsquare.in']);
+const ROLE_LABEL = { TL: 'Team Lead', QA: 'QA Auditor' };
+function roleForEmail(email) {
+  const e = String(email || '').trim().toLowerCase();
+  return e && QA_AUDITOR_EMAILS.indexOf(e) >= 0 ? 'QA' : 'TL';
+}
+function setQaAuditorEmails(list) {
+  if (Array.isArray(list) && list.length) {
+    QA_AUDITOR_EMAILS = list.map(s => String(s).trim().toLowerCase()).filter(Boolean);
+  }
+}
+function getQaAuditorEmails() { return QA_AUDITOR_EMAILS.slice(); }
 
-  // 1) resolve the runtime auth config, THEN decide which gate (if any) to show
-  useEffectApp(() => {
-    let alive = true;
-    (async () => {
-      try { await (authApi.init ? authApi.init() : Promise.resolve()); } catch (e) { /* fail closed */ }
-      if (!alive) return;
-      const on = !!authApi.enabled;
-      setGated(on);
-      const sess = authApi.session;
-      if (!on) setPhase('loading');
-      else if (!sess) setPhase('login');
-      else setPhase(authApi.isAuthorized(sess) ? 'loading' : 'denied');
-    })();
-    return () => { alive = false; };
-  }, []);
+// ---- Geography ----
+// City + cluster ("Combined City, Cluster" in the Meeting Tracker sheet).
+// Each Team Lead's team operates in one city; an LRM inherits its TL's city.
+// (In LIVE data, City comes straight from the tracker row — this mapping only
+//  seeds the demo so the join is visible.)
+const CITY_BY_TL = {
+  'vikram.nair@solarsquare.in':  { city: 'Nagpur', cluster: 'Nagpur · Central' },
+  'sneha.patil@solarsquare.in':  { city: 'Nagpur', cluster: 'Nagpur · West' },
+  'imran.khan@solarsquare.in':   { city: 'Pune',   cluster: 'Pune · Hinjewadi' },
+  'divya.reddy@solarsquare.in':  { city: 'Nashik', cluster: 'Nashik · College Rd' },
+};
+function cityForTl(tlEmail) { return CITY_BY_TL[tlEmail] || { city: 'Unassigned', cluster: '—' }; }
 
-  // 2) load data only once we're past the gate; a server 401/403 drops us to 'denied'
-  useEffectApp(() => {
-    if (phase !== 'loading') return;
-    let alive = true;
-    (async () => {
-      const api = window.QA.api;
-      try {
-        const [user, emps, list, mtg] = await Promise.all([
-          api.getCurrentUser(), api.getAllEmployees(), api.loadAudits(), api.loadMeetings(),
-        ]);
-        if (!alive) return;
-        if (user && user.email) setSession({ ...user, role: window.QA.roleForEmail(user.email) });
-        setAgents(emps); setAudits(list); setMeetings(mtg); setPhase('ready');
-      } catch (err) {
-        if (!alive) return;
-        if (err && err.isAuth) setPhase('denied');
-        else { console.error(err); setPhase('ready'); }
-      }
-    })();
-    return () => { alive = false; };
-  }, [phase]);
+// ---- Lighthouse (internal lead console) ----
+// The Meeting Tracker sheet now carries a ready-made "Lead Link" column that deep-links
+// straight to the lead record in Lighthouse, keyed by the row's "Entity id" (a Mongo
+// ObjectId), e.g. .../#/menu/lead/details/<entityId>/ . We surface that link verbatim as
+// row.leadLink and just consume it. lighthouseUrl() builds the same URL from an entity id
+// (used as a fallback / for manual entry where only an id is known).
+const LIGHTHOUSE_BASE = 'https://lighthouse.solarsquare.in/#/menu/lead/details/';
+function lighthouseUrl(entityId) {
+  const id = String(entityId || '').trim();
+  return id ? LIGHTHOUSE_BASE + encodeURIComponent(id) + '/' : '';
+}
+// Fabricate a believable 24-char Mongo ObjectId. The leading 4 bytes are the document
+// timestamp, so seeding from the meeting date makes the demo ids line up with real ones
+// (June-2026 rows start 0x6a…, matching the sample sheet).
+function makeEntityId(rng, dateMs) {
+  const ts = Math.floor((dateMs || Date.now()) / 1000).toString(16).padStart(8, '0').slice(-8);
+  let rest = '';
+  for (let i = 0; i < 16; i++) rest += Math.floor(rng() * 16).toString(16);
+  return ts + rest;
+}
 
-  const reload = async () => { setAudits(await window.QA.api.loadAudits()); };
+// ---- Call recordings ----
+// In LIVE data the recording URL comes straight from the Meeting Tracker sheet's
+// "Recording Link" column, surfaced as row.recordingUrl in getMeetingTracker (blank when
+// the call hasn't been linked yet — the inline player shows "No recording linked").
+// Here we seed a pool of real, streamable samples so the inline player is demonstrable.
+const DEMO_RECORDINGS = Array.from({ length: 16 }, (_, i) =>
+  `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-${i + 1}.mp3`);
 
-  const hue = (ACCENTS.find(a => a.hex === t.accent) || ACCENTS[0]).hue;
-  const fonts = FONTS[t.headingFont] || FONTS.grotesk;
+// The TEAM LEAD is the auditor: every meeting is audited by the TL of its LRM.
+// So a lead's assigned auditor = that LRM's Team Lead, and a TL's "queue" is simply
+// their own team's pending meetings. (QA_AUDITORS is retained only for legacy mock
+// audit attribution.)
+function auditorForLrm(emp) {
+  return { name: (emp && emp.tlName) || '—', email: (emp && emp.tlEmail) || '' };
+}
 
-  useEffectApp(() => {
-    const r = document.documentElement;
-    r.style.setProperty('--accent-h', hue);
-    r.style.setProperty('--font-display', fonts.display);
-    r.style.setProperty('--font-ui', fonts.ui);
-    r.setAttribute('data-density', t.density);
-    r.setAttribute('data-theme', t.dark ? 'dark' : 'light');
-  }, [hue, fonts.display, fonts.ui, t.density, t.dark]);
+// ---- Deterministic PRNG so the demo is stable across reloads ----
+function makeRng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+}
 
-  const submitAudit = async (payload) => {
-    setBusy(true);
-    const res = await window.QA.api.saveAudit(payload);
-    await reload(); setBusy(false);
-    return res;
+// Each agent has a latent skill profile (per-section bias) -> believable patterns.
+function buildMockAudits() {
+  const rng = makeRng(20260604);
+  const pick = arr => arr[Math.floor(rng() * arr.length)];
+  const audits = [];
+  let uid = 1;
+
+  const skill = AGENTS.map((_, i) => {
+    const base = 0.66 + rng() * 0.3; // 0.66 - 0.96
+    return SECTIONS.map((s, si) => {
+      // weakest section varies per agent
+      const dip = (si === (i % 5)) ? -0.18 : 0;
+      const dip2 = (s.key === 'objection') ? -0.06 : 0;
+      return Math.max(0.35, Math.min(0.99, base + dip + dip2 + (rng() - 0.5) * 0.12));
+    });
+  });
+
+  const today = new Date('2026-06-04');
+
+  const genAnswers = (skillRow) => {
+    const answers = {};
+    SECTIONS.forEach((s, si) => {
+      const p = skillRow[si];
+      s.items.forEach((_, ii) => {
+        const id = `${s.key}-${ii}`;
+        const r = rng();
+        if (r > 0.93 && s.items.length > 2) answers[id] = 'NA';
+        else answers[id] = rng() < p ? 'Yes' : 'No';
+      });
+    });
+    return answers;
   };
 
-  if (phase === 'booting') return <BootSplash />;
-  if (gated && phase === 'login') return <LoginScreen authApi={authApi} />;
-  if (gated && phase === 'denied') return <AccessDenied authApi={authApi} session={session} />;
-  if (phase === 'loading') return <BootSplash />;
 
-  return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0 }} className="ss-shell">
-      <Sidebar active={active} onNav={setActive} count={audits.length} session={session} onSignOut={authApi.signOut} signInEnabled={gated} />
-      <main className="ss-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', height: '100%' }}>
-        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '34px clamp(20px, 4vw, 44px) 80px' }}>
-          {active === 'summary' && <SummaryView audits={audits} meetings={meetings} threshold={t.threshold} />}
-          {active === 'audit' && <AuditView agents={agents} meetings={meetings} audits={audits} onSubmit={submitAudit} threshold={t.threshold} session={session} busy={busy} />}
-          {active === 'analytics' && <AnalyticsView audits={audits} threshold={t.threshold} />}
-          {active === 'calibration' && <CalibrationView audits={audits} threshold={t.threshold} />}
-          {active === 'performance' && <PerformanceView audits={audits} agents={agents} threshold={t.threshold} />}
-        </div>
-      </main>
+  AGENTS.forEach((agent, ai) => {
+    const n = 4 + Math.floor(rng() * 6); // 4-9 leads each
+    for (let k = 0; k < n; k++) {
+      const answers = genAnswers(skill[ai]);
+      const { sectionPct, overall } = scoreAudit(answers);
 
-      <TweaksPanel title="Tweaks">
-        <TweakSection label="Brand" />
-        <TweakColor label="Accent" value={t.accent} options={ACCENTS.map(a => a.hex)} onChange={v => setTweak('accent', v)} />
-        <TweakRadio label="Headings" value={t.headingFont} options={[{ value: 'grotesk', label: 'Grotesk' }, { value: 'jakarta', label: 'Jakarta' }]} onChange={v => setTweak('headingFont', v)} />
-        <TweakSection label="Scoring" />
-        <TweakSlider label="Pass threshold" value={t.threshold} min={50} max={95} step={5} unit="%" onChange={v => setTweak('threshold', v)} />
-        <TweakSection label="Display" />
-        <TweakRadio label="Density" value={t.density} options={['compact', 'regular', 'comfy']} onChange={v => setTweak('density', v)} />
-        <TweakToggle label="Dark mode" value={t.dark} onChange={v => setTweak('dark', v)} />
-      </TweaksPanel>
+      const daysAgo = Math.floor(rng() * 75);
+      const d = new Date(today); d.setDate(d.getDate() - daysAgo);
+      const md = new Date(d); md.setDate(md.getDate() + 1 + Math.floor(rng() * 6));
 
-      <style>{RESPONSIVE_CSS}</style>
-    </div>
-  );
+      // The TEAM LEAD of the LRM is the first-line auditor in our model.
+      const auditor = { name: agent.tlName, email: agent.tlEmail, role: 'TL' };
+      const mStatus = pick(['Scheduled', 'Completed', 'Completed', 'No-show', 'Rescheduled']);
+      const mAfter = overall >= 80
+        ? pick(['Confirmed', 'Completed', 'Confirmed', 'Rescheduled'])
+        : pick(['Rescheduled', 'Dropped', 'Confirmed', 'No-show']);
+
+      const rec = {
+        id: uid++,
+        agentName: agent.name, agentEmail: agent.email,
+        tlName: agent.tlName, tlEmail: agent.tlEmail,
+        mgrName: agent.mgrName, mgrEmail: agent.mgrEmail,
+        adosName: agent.adosName, adosEmail: agent.adosEmail,
+        meetingDate: md.toISOString().slice(0, 10),
+        leadId: 'LMH' + (150000 + Math.floor(rng() * 49999)),
+        meetingStatus: mStatus, meetingStatusAfterAudit: mAfter,
+        auditorName: auditor.name, auditorEmail: auditor.email, auditorRole: auditor.role || 'TL',
+        callDate: d.toISOString().slice(0, 10), ts: d.getTime(),
+        answers, sectionPct, overall,
+        notes: buildNotes(rng, sectionPct),
+      };
+      audits.push(rec);
+    }
+  });
+  // QA calibration overlay — a QA Auditor independently re-audits ~1 in 3 of the leads a TL
+  // already scored, producing the TL-vs-QA pairs the Calibration view compares. Answers are
+  // jittered so the two auditors realistically agree on most points and diverge on a few.
+  const tlAudits = audits.filter(a => a.auditorRole === 'TL');
+  tlAudits.forEach((base, i) => {
+    if (i % 3 !== 0) return;
+    const qa = QA_AUDITORS[((i / 3) | 0) % QA_AUDITORS.length];
+    const answers = { ...base.answers };
+    PARAMS.forEach((p, pi) => { if ((i + pi) % 7 === 0) answers[p.id] = (rng() < 0.5 ? 'Yes' : 'No'); });
+    const sc = scoreAudit(answers);
+    const d = new Date(base.ts); d.setDate(d.getDate() + 1 + Math.floor(rng() * 3));
+    audits.push({
+      ...base,
+      id: uid++,
+      auditorName: qa.name, auditorEmail: qa.email, auditorRole: 'QA',
+      callDate: d.toISOString().slice(0, 10), ts: d.getTime(),
+      answers, sectionPct: sc.sectionPct, overall: sc.overall,
+      notes: buildNotes(rng, sc.sectionPct),
+    });
+  });
+  audits.sort((a, b) => b.ts - a.ts);
+  return audits;
 }
 
-const RESPONSIVE_CSS = `
-  @media (max-width: 1080px) {
-    .audit-grid { grid-template-columns: 1fr !important; }
-    .audit-rail { position: static !important; }
-    .filter-trend-grid { grid-template-columns: 1fr !important; }
-  }
-  @media (max-width: 880px) {
-    .kpi-grid { grid-template-columns: repeat(2, 1fr) !important; }
-    .filter-grid { grid-template-columns: repeat(2, 1fr) !important; }
-    .perf-grid { grid-template-columns: 1fr !important; }
-    .miss-grid { grid-template-columns: 1fr !important; }
-    .profile-grid { grid-template-columns: repeat(2, 1fr) !important; }
-  }
-  @media (max-width: 760px) {
-    .ss-shell { flex-direction: column; }
-    .ss-sidebar { width: 100% !important; flex: none !important; height: auto !important; border-right: none; border-bottom: 1px solid var(--line); }
-    .ss-nav { flex-direction: row !important; overflow-x: auto; padding: 0 12px 12px !important; }
-    .ss-nav button span span:last-child { display: none !important; }
-    .ss-userbox { display: none !important; }
-    .ss-main { height: auto !important; }
-  }
-  @media (max-width: 560px) {
-    .kpi-grid { grid-template-columns: 1fr !important; }
-    .profile-grid { grid-template-columns: 1fr !important; }
-    .filter-grid { grid-template-columns: 1fr !important; }
-  }
-`;
-
-function BootSplash() {
-  return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, background: 'var(--bg)' }}>
-      <div style={{ width: 44, height: 44, borderRadius: 13, background: 'var(--primary)', position: 'relative', boxShadow: 'var(--shadow-md)' }}>
-        <div style={{ position: 'absolute', top: 10, left: 10, width: 16, height: 16, borderRadius: '50%', background: 'var(--sun)' }} />
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, color: 'var(--ink-3)', fontSize: 13.5, fontWeight: 500 }}>
-        <span style={{ width: 15, height: 15, border: '2px solid var(--line)', borderTopColor: 'var(--primary)', borderRadius: '50%', display: 'inline-block', animation: 'ss-spin 0.7s linear infinite' }} />
-        Loading quality data…
-      </div>
-      <style>{`@keyframes ss-spin{to{transform:rotate(360deg)}}`}</style>
-    </div>
-  );
+function buildNotes(rng, sectionPct) {
+  const weakest = SECTIONS.reduce((w, s) => (sectionPct[s.key] ?? 100) < (sectionPct[w.key] ?? 100) ? s : w, SECTIONS[0]);
+  const strengthBank = [
+    'Warm, confident greeting and clear self-introduction.',
+    'Strong value framing — tied solar savings to the customer\u2019s bill.',
+    'Handled the pricing question with full transparency.',
+    'Excellent rapport; customer was engaged throughout.',
+    'Logged the lead cleanly in CRM with correct tagging.',
+  ];
+  const improveBank = {
+    opening: 'Set the reference for the call earlier so the customer knows why we\u2019re calling.',
+    selling: 'Spend more time on the value proposition before moving to qualification.',
+    qualification: 'Missed confirming roof ownership and meter phase — capture these every time.',
+    objection: 'Address objections directly instead of deflecting to the site visit.',
+    closing: 'Confirm the appointment slot explicitly and repeat it back to the customer.',
+  };
+  const actionBank = {
+    opening: 'Practice the opening script; review 2 recorded calls with TL.',
+    selling: 'Shadow a top performer on value-prop delivery this week.',
+    qualification: 'Use the qualification checklist on the next 10 calls.',
+    objection: 'Attend the objection-handling refresher session.',
+    closing: 'Role-play closing & appointment confirmation in next 1:1.',
+  };
+  return {
+    strengths: strengthBank[Math.floor(rng() * strengthBank.length)],
+    improvements: improveBank[weakest.key],
+    actionItems: actionBank[weakest.key],
+  };
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// ---- Meeting Tracker ----
+// Mirrors the "meeting tracker" Google Sheet: one row per meeting scheduled.
+// Columns: lead_id, meeting_type, "Combined City, Cluster", meeting_schedule_date,
+//          assigned_lrm_email, assigned_lrm.
+// We seed it so it JOINS to the audits: every audited lead appears here (=> "Audits
+// Done"), plus extra un-audited meetings (=> "Pending"). City comes from the row;
+// TL is resolved from the LRM via the employee directory.
+function buildMeetingTracker(audits) {
+  const rng = makeRng(76543210);
+  const byEmail = {};
+  AGENTS.forEach(a => { byEmail[a.email] = a; });
+  const today = new Date('2026-06-08');
+  const fmtSched = (d, h) => {
+    const dd = new Date(d); dd.setHours(h, [0, 30][Math.floor(rng() * 2)], 0, 0);
+    return dd.toISOString();
+  };
+  const meetingTypes = ['fresh_meeting', 'fresh_meeting', 'fresh_meeting', 're_meeting'];
+  const rows = [];
+  let seq = 100000;
 
-// ---- Brand mark + access screens -------------------------------------------------
-// SolarSquare brand blues (fixed to the logo, independent of the dashboard's accent tweak)
-const BRAND = { navy: '#141a63', blue: '#2433b8', cyan: '#46b6ec' };
+  // 1) every audited lead -> a tracker row (these count as "Audits Done")
+  audits.forEach(a => {
+    const emp = byEmail[a.agentEmail] || {};
+    const geo = cityForTl(emp.tlEmail);
+    const au = auditorForLrm(emp);
+    const sched = a.meetingDate || a.callDate;
+    const entityId = makeEntityId(rng, Date.parse(sched + 'T00:00:00Z'));
+    rows.push({
+      leadId: a.leadId,
+      entityId, leadLink: lighthouseUrl(entityId),
+      meetingType: 'fresh_meeting',
+      city: geo.city, cluster: geo.cluster,
+      scheduleDate: sched,
+      lrmEmail: a.agentEmail, lrmName: a.agentName,
+      assignedAuditorEmail: au.email, assignedAuditorName: au.name,
+      recordingUrl: DEMO_RECORDINGS[Math.floor(rng() * DEMO_RECORDINGS.length)],
+    });
+  });
 
-// Decorative grid of rounded squares echoing the solar-panel "sun" in the logo.
-function PanelMotif({ cols = 6, rows = 5, cell = 30, gap = 9, style }) {
-  const pattern = [0.9, 0.5, 0.22, 0.7, 0.35, 0.16];
-  const cells = [];
-  for (let i = 0; i < cols * rows; i++) {
-    const op = pattern[(i * 7 + (i % rows) * 3) % pattern.length];
-    cells.push(
-      <span key={i} style={{ width: cell, height: cell, borderRadius: cell * 0.26, background: 'rgba(255,255,255,' + (op * 0.5).toFixed(2) + ')' }} />
-    );
-  }
-  return (
-    <div aria-hidden="true" style={{ position: 'absolute', display: 'grid', gridTemplateColumns: 'repeat(' + cols + ',' + cell + 'px)', gap, ...style }}>{cells}</div>
-  );
+  // 2) extra meetings with NO audit yet (these are the "Pending" backlog)
+  AGENTS.forEach(agent => {
+    const geo = cityForTl(agent.tlEmail);
+    const pend = 2 + Math.floor(rng() * 6); // 2-7 pending each
+    for (let k = 0; k < pend; k++) {
+      const daysAhead = Math.floor(rng() * 8) - 2; // mostly upcoming, some just-passed
+      const d = new Date(today); d.setDate(d.getDate() + daysAhead);
+      const leadId = 'LMH' + (seq++);
+      const au = auditorForLrm(agent);
+      const entityId = makeEntityId(rng, d.getTime());
+      // Recording Link can be blank in the sheet until the call is linked — mirror that.
+      const hasRec = rng() > 0.18;
+      rows.push({
+        leadId,
+        entityId, leadLink: lighthouseUrl(entityId),
+        meetingType: meetingTypes[Math.floor(rng() * meetingTypes.length)],
+        city: geo.city, cluster: geo.cluster,
+        scheduleDate: fmtSched(d, 8 + Math.floor(rng() * 9)),
+        lrmEmail: agent.email, lrmName: agent.name,
+        assignedAuditorEmail: au.email, assignedAuditorName: au.name,
+        recordingUrl: hasRec ? DEMO_RECORDINGS[Math.floor(rng() * DEMO_RECORDINGS.length)] : '',
+      });
+    }
+  });
+
+  // 3) Meeting outcome — did the scheduled meeting actually get DONE?
+  // Future-dated meetings are still 'Scheduled' (not yet due). Past meetings resolve to a
+  // held/missed outcome (~72% completed). In LIVE data this comes straight from the
+  // tracker's "Meeting Status" column; here we seed it deterministically.
+  const outcomeToday = '2026-06-08';
+  const outcomePool = ['Completed', 'Completed', 'Completed', 'Completed', 'Completed',
+    'Completed', 'Completed', 'No-show', 'Rescheduled', 'Cancelled'];
+  rows.forEach(r => {
+    const iso = (r.scheduleDate || '').slice(0, 10);
+    r.meetingStatus = iso > outcomeToday ? 'Scheduled' : outcomePool[Math.floor(rng() * outcomePool.length)];
+    // "Meeting Done Date" — stamped only when the meeting was actually held. Its presence is
+    // the real completion signal in production; here it mirrors a 'Completed' outcome.
+    r.meetingDoneDate = r.meetingStatus === 'Completed' ? iso : '';
+    r.meetingDoneISO = r.meetingDoneDate;
+  });
+
+  return rows;
 }
 
-function ScreenWrap({ children, tone = 'brand' }) {
-  return (
-    <div style={{
-      height: '100%', display: 'grid', placeItems: 'center', padding: 24, position: 'relative', overflow: 'hidden',
-      background: 'radial-gradient(120% 100% at 18% 0%, ' + BRAND.blue + ' 0%, ' + BRAND.navy + ' 58%, #0d1247 100%)',
-    }}>
-      <PanelMotif cols={6} rows={5} cell={34} gap={11} style={{ top: -46, right: -40, transform: 'rotate(12deg)', opacity: 0.9 }} />
-      <PanelMotif cols={5} rows={4} cell={26} gap={9} style={{ bottom: -34, left: -30, transform: 'rotate(-8deg)', opacity: 0.7 }} />
-      <div style={{
-        position: 'relative', zIndex: 1, width: 'min(440px, 100%)', background: 'var(--surface)', border: '1px solid var(--line)',
-        borderRadius: 'var(--radius-lg)', boxShadow: '0 30px 70px -20px rgba(8,12,55,0.55), 0 8px 24px -8px rgba(8,12,55,0.35)',
-        padding: '42px 40px 34px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center',
-      }}>{children}</div>
-      <div style={{ position: 'absolute', bottom: 18, left: 0, right: 0, textAlign: 'center', fontSize: 11.5, letterSpacing: '0.04em', color: 'rgba(255,255,255,0.6)' }}>
-        SolarSquare · Quality Systems
-      </div>
-    </div>
-  );
+// derive a display name from an email local-part: "laxshmi.iyer@x" -> "Laxshmi Iyer"
+function nameFromEmail(email) {
+  if (!email) return '';
+  return email.split('@')[0].split(/[._]+/).filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
 }
+// Simulated signed-in session. Team Leads are the auditors, so the demo logs in as a TL —
+// their queue is their own team's pending meetings. (In LIVE Apps Script this is the
+// real Google account of whoever opens the app.)
+const SESSION = { email: 'vikram.nair@solarsquare.in', role: 'Team Lead' };
+SESSION.name = nameFromEmail(SESSION.email);
 
-function BrandLogo({ width = 150 }) {
-  return <img src="/solarsquare-logo.png" alt="SolarSquare" style={{ width, height: 'auto', display: 'block' }} />;
-}
+const __MOCK_AUDITS = buildMockAudits();
 
-function Eyebrow() {
-  return (
-    <div style={{ marginTop: 22, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '5px 12px', borderRadius: 999, background: 'var(--primary-softer)', border: '1px solid var(--line-soft)' }}>
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: BRAND.cyan, flex: '0 0 auto' }} />
-      <span style={{ fontSize: 10.5, color: 'var(--ink-2)', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase' }}>Quality Systems</span>
-    </div>
-  );
-}
-
-function LoginScreen({ authApi }) {
-  const btnRef = useRefApp(null);
-  useEffectApp(() => {
-    if (btnRef.current) authApi.renderButton(btnRef.current, { size: 'large', width: 300 });
-  }, []);
-  return (
-    <ScreenWrap>
-      <BrandLogo width={156} />
-      <Eyebrow />
-      <h1 style={{ fontSize: 25, marginTop: 16, color: 'var(--ink)' }}>Sign in to continue</h1>
-      <p style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--ink-2)', margin: '9px 0 24px', maxWidth: 310 }}>
-        The QA audit dashboard is private. Use your SolarSquare account to sign in.
-      </p>
-      <div ref={btnRef} style={{ minHeight: 44, display: 'grid', placeItems: 'center' }} />
-      <div style={{ width: '100%', height: 1, background: 'var(--line-soft)', margin: '26px 0 16px' }} />
-      <p style={{ fontSize: 11.5, color: 'var(--ink-3)', maxWidth: 310, lineHeight: 1.55 }}>
-        Access is restricted to authorized <strong style={{ color: 'var(--ink-2)' }}>@{authApi.allowedDomain}</strong> accounts.
-        If you can't get in, ask a Quality Systems admin to add you.
-      </p>
-    </ScreenWrap>
-  );
-}
-
-function AccessDenied({ authApi, session }) {
-  const email = (session && session.email) || '';
-  return (
-    <ScreenWrap>
-      <BrandLogo width={132} />
-      <div style={{ width: 48, height: 48, borderRadius: 14, background: 'var(--bad-soft)', display: 'grid', placeItems: 'center', color: 'var(--bad)', marginTop: 22 }}>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10" rx="2" /><path d="M8 10V7a4 4 0 018 0v3" /></svg>
-      </div>
-      <h1 style={{ fontSize: 22, marginTop: 16, color: 'var(--ink)' }}>Access not authorized</h1>
-      <p style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--ink-2)', margin: '9px 0 6px', maxWidth: 320 }}>
-        {email
-          ? <>The account <strong style={{ color: 'var(--ink)' }}>{email}</strong> isn't on the access list for this dashboard.</>
-          : <>Your account isn't on the access list for this dashboard.</>}
-      </p>
-      <p style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 0 22px', maxWidth: 320 }}>
-        Ask a Quality Systems admin to grant you access, then sign in again.
-      </p>
-      <button onClick={authApi.signOut} style={{
-        padding: '11px 20px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)',
-        color: 'var(--ink)', fontWeight: 600, fontSize: 13.5, cursor: 'pointer',
-      }}>Sign in with a different account</button>
-    </ScreenWrap>
-  );
-}
+window.QA = {
+  SECTIONS, PARAMS, PASS_DEFAULT, scoreAudit, normItem, nameFromEmail, SESSION,
+  MANAGERS, TEAM_LEADS, AGENTS, QA_AUDITORS, ADOS_LIST,
+  ROLE_LABEL, roleForEmail, setQaAuditorEmails, getQaAuditorEmails,
+  CITY_BY_TL, cityForTl, lighthouseUrl, LIGHTHOUSE_BASE,
+  MOCK_AUDITS: __MOCK_AUDITS,
+  MEETING_TRACKER: buildMeetingTracker(__MOCK_AUDITS),
+  fmtDate: (iso) => {
+    if (!iso) return '\u2014';
+    const d = new Date(iso + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  },
+};
