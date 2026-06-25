@@ -1,637 +1,415 @@
-// audit.jsx — single-stage audit form. The auditor is the signed-in user (captured automatically).
-const { useState: useStateA, useMemo: useMemoA, useRef: useRefA } = React;
+// data.js — domain model, scoring logic, and realistic mock audits.
+// Exported on window for the other babel scripts.
 
-// Deep-link button to the lead's record in the Lighthouse console.
-// Prefers the ready-made "Lead Link" from the Meeting Tracker sheet (href); falls back to
-// building the URL from an entity id when only that is known (e.g. manual entry).
-function LighthouseLink({ href, entityId, leadId, compact, style }) {
-  const url = href || window.QA.lighthouseUrl(entityId);
-  if (!url) return null;
-  return (
-    <a href={url} target="_blank" rel="noopener noreferrer" title={`Open ${leadId || 'lead'} in Lighthouse`}
-      onClick={e => e.stopPropagation()}
-      onMouseEnter={e => { e.currentTarget.style.background = 'var(--primary-soft)'; e.currentTarget.style.borderColor = 'color-mix(in oklch, var(--primary) 32%, transparent)'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.borderColor = 'var(--line)'; }}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none',
-        height: 30, padding: compact ? '0 9px' : '0 12px', borderRadius: 99,
-        border: '1px solid var(--line)', background: 'var(--surface)',
-        color: 'var(--primary-strong)', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap',
-        transition: 'background 0.15s, border-color 0.15s', ...style,
-      }}>
-      <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M8 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16h9a1.5 1.5 0 001.5-1.5V12" />
-        <path d="M12 4h4v4 M16 4l-7 7" />
-      </svg>
-      {!compact && 'Lighthouse'}
-    </a>
-  );
+// ---- Evaluation framework: 5 sections, 17 criteria ----
+const SECTIONS = [
+  { key: 'opening', name: 'Opening', short: 'Open', items: [
+    { label: 'Greeting & self-introduction', eg: ['Namaste se Kapil ji main shankar nagar office se laxshmi bol rahi hun'] },
+    { label: 'Stated purpose / set reference for the call', eg: ['Apne solar main interest show kiya tha', 'Apka roof survery hua tha uska design ready hai'] },
+  ]},
+  { key: 'selling', name: 'Selling', short: 'Sell', items: [
+    'Briefly explained SolarSquare',
+    'Explained the benefits of the site visit',
+    { label: 'Value proposition', eg: ['Topcon & site visit'] },
+    { label: 'End to end service', eg: ['from design to installation to subsidy'] },
+    'Insurance & warranty info',
+  ]},
+  { key: 'qualification', name: 'Qualification', short: 'Qual', items: [
+    'Captured monthly electricity bill',
+    'Confirmed roof ownership',
+    'Roof Type',
+    'Identified meter type & phases',
+    'Construction status',
+    'Evaluated shadow / obstruction',
+  ]},
+  { key: 'objection', name: 'Objection Handling', short: 'Obj', items: [
+    'Clear, concise answers & redirection',
+  ]},
+  { key: 'closing', name: 'Closing', short: 'Close', items: [
+    'Set the appointment Time',
+    'Confirmed Appointment date',
+    'Correct CRM logging & Disposition',
+  ]},
+];
+
+// normalize an item to { label, eg }
+function normItem(item) { return typeof item === 'string' ? { label: item, eg: [] } : { eg: [], ...item }; }
+
+// flat list of all 17 params with section ref
+const PARAMS = [];
+SECTIONS.forEach((s, si) => s.items.forEach((item, ii) => {
+  const it = normItem(item);
+  PARAMS.push({ id: `${s.key}-${ii}`, label: it.label, eg: it.eg, section: s.key, sectionName: s.name, sectionIdx: si });
+}));
+
+const PASS_DEFAULT = 80;
+
+// ---- Scoring ----
+// Each section scored as % of Yes among applicable (non-NA) items.
+// Overall = mean of the 5 section percentages (each section weighted equally, "Max 5 pts").
+function scoreAudit(answers) {
+  // answers: { [paramId]: 'Yes'|'No'|'NA' }
+  const sectionPct = {};
+  SECTIONS.forEach(s => {
+    const ids = s.items.map((_, ii) => `${s.key}-${ii}`);
+    let applicable = 0, yes = 0;
+    ids.forEach(id => {
+      const a = answers[id];
+      if (a === 'NA' || a == null) return;
+      applicable++;
+      if (a === 'Yes') yes++;
+    });
+    sectionPct[s.key] = applicable === 0 ? null : Math.round((yes / applicable) * 100);
+  });
+  const vals = SECTIONS.map(s => sectionPct[s.key]).filter(v => v != null);
+  const overall = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
+  return { sectionPct, overall };
 }
 
-// Entity id chip — the sheet's "Entity id" (Mongo ObjectId). Click to copy. Shows a
-// truncated, monospace id; the full value is in the title + copied to clipboard.
-function EntityIdChip({ entityId, style }) {
-  const [copied, setCopied] = useStateA(false);
+// ---- People ----
+// Hierarchy: LRM (agent) -> Team Lead -> ZSM (manager) -> ADOS
+const ADOS_LIST = [
+  { name: 'Sanjay Kapoor', email: 'sanjay.kapoor@solarsquare.in' },
+  { name: 'Ritu Malhotra', email: 'ritu.malhotra@solarsquare.in' },
+];
+const MANAGERS = [
+  { name: 'Rohan Mehta', email: 'rohan.mehta@solarsquare.in', ados: 0 },
+  { name: 'Aditi Sharma', email: 'aditi.sharma@solarsquare.in', ados: 1 },
+];
+const TEAM_LEADS = [
+  { name: 'Vikram Nair', email: 'vikram.nair@solarsquare.in', mgr: 0 },
+  { name: 'Sneha Patil', email: 'sneha.patil@solarsquare.in', mgr: 0 },
+  { name: 'Imran Khan', email: 'imran.khan@solarsquare.in', mgr: 1 },
+  { name: 'Divya Reddy', email: 'divya.reddy@solarsquare.in', mgr: 1 },
+];
+const AGENTS = [
+  { name: 'Aarav Joshi',     tl: 0 }, { name: 'Priya Kulkarni',  tl: 0 },
+  { name: 'Karthik Iyer',    tl: 1 }, { name: 'Neha Bansal',     tl: 1 },
+  { name: 'Sahil Verma',     tl: 2 }, { name: 'Ananya Das',      tl: 2 },
+  { name: 'Rahul Pillai',    tl: 3 }, { name: 'Meera Chauhan',   tl: 3 },
+  { name: 'Tushar Gupta',    tl: 0 }, { name: 'Fatima Sheikh',   tl: 2 },
+].map(a => {
+  const slug = a.name.toLowerCase().replace(/[^a-z]+/g, '.');
+  const tl = TEAM_LEADS[a.tl];
+  const mgr = MANAGERS[tl.mgr];
+  const ados = ADOS_LIST[mgr.ados];
+  return {
+    name: a.name,
+    email: `${slug}@solarsquare.in`,
+    tlName: tl.name, tlEmail: tl.email,
+    mgrName: mgr.name, mgrEmail: mgr.email,
+    adosName: ados.name, adosEmail: ados.email,
+  };
+});
+const QA_AUDITORS = [
+  { name: 'Pooja Menon',  email: 'pooja.menon@solarsquare.in' },
+  { name: 'Arjun Saxena', email: 'arjun.saxena@solarsquare.in' },
+  { name: 'Kavya Rao',    email: 'kavya.rao@solarsquare.in' },
+];
+
+// ---- Auditor roles ----
+// Two kinds of auditor sign in: a lead's Team Lead (TL) and a dedicated QA Auditor who
+// independently re-audits leads across every team. A QA Auditor is identified purely by
+// email; this list seeds the demo and is overridden at runtime from /api/config
+// (QA_AUDITOR_EMAILS env) so adding a new auditor never needs a code change.
+let QA_AUDITOR_EMAILS = QA_AUDITORS.map(a => a.email.toLowerCase()).concat(['samapti.pal@solarsquare.in']);
+const ROLE_LABEL = { TL: 'Team Lead', QA: 'QA Auditor' };
+function roleForEmail(email) {
+  const e = String(email || '').trim().toLowerCase();
+  return e && QA_AUDITOR_EMAILS.indexOf(e) >= 0 ? 'QA' : 'TL';
+}
+function setQaAuditorEmails(list) {
+  if (Array.isArray(list) && list.length) {
+    QA_AUDITOR_EMAILS = list.map(s => String(s).trim().toLowerCase()).filter(Boolean);
+  }
+}
+function getQaAuditorEmails() { return QA_AUDITOR_EMAILS.slice(); }
+
+// ---- Geography ----
+// City + cluster ("Combined City, Cluster" in the Meeting Tracker sheet).
+// Each Team Lead's team operates in one city; an LRM inherits its TL's city.
+// (In LIVE data, City comes straight from the tracker row — this mapping only
+//  seeds the demo so the join is visible.)
+const CITY_BY_TL = {
+  'vikram.nair@solarsquare.in':  { city: 'Nagpur', cluster: 'Nagpur · Central' },
+  'sneha.patil@solarsquare.in':  { city: 'Nagpur', cluster: 'Nagpur · West' },
+  'imran.khan@solarsquare.in':   { city: 'Pune',   cluster: 'Pune · Hinjewadi' },
+  'divya.reddy@solarsquare.in':  { city: 'Nashik', cluster: 'Nashik · College Rd' },
+};
+function cityForTl(tlEmail) { return CITY_BY_TL[tlEmail] || { city: 'Unassigned', cluster: '—' }; }
+
+// ---- Lighthouse (internal lead console) ----
+// The Meeting Tracker sheet now carries a ready-made "Lead Link" column that deep-links
+// straight to the lead record in Lighthouse, keyed by the row's "Entity id" (a Mongo
+// ObjectId), e.g. .../#/menu/lead/details/<entityId>/ . We surface that link verbatim as
+// row.leadLink and just consume it. lighthouseUrl() builds the same URL from an entity id
+// (used as a fallback / for manual entry where only an id is known).
+const LIGHTHOUSE_BASE = 'https://lighthouse.solarsquare.in/#/menu/lead/details/';
+function lighthouseUrl(entityId) {
   const id = String(entityId || '').trim();
-  if (!id) return null;
-  const short = id.length > 12 ? id.slice(0, 6) + '…' + id.slice(-4) : id;
-  const copy = (e) => {
-    e.stopPropagation();
-    try { navigator.clipboard.writeText(id); } catch (err) {}
-    setCopied(true); setTimeout(() => setCopied(false), 1100);
-  };
-  return (
-    <button type="button" onClick={copy} title={copied ? 'Copied!' : `Entity id ${id} — click to copy`}
-      onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.borderColor = 'var(--line)'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'var(--line-soft)'; }}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px',
-        borderRadius: 99, border: '1px solid var(--line-soft)', background: 'transparent',
-        color: copied ? 'var(--ok)' : 'var(--ink-3)', fontFamily: 'var(--font-mono)',
-        fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', cursor: 'pointer',
-        transition: 'background 0.15s, border-color 0.15s, color 0.15s', ...style,
-      }}>
-      <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-        {copied
-          ? <path d="M5 10.5l3.2 3.2L15 6" />
-          : <><rect x="7" y="7" width="9" height="9" rx="1.6" /><path d="M13 7V5.5A1.5 1.5 0 0011.5 4h-6A1.5 1.5 0 004 5.5v6A1.5 1.5 0 005.5 13H7" /></>}
-      </svg>
-      {copied ? 'Copied' : short}
-    </button>
-  );
+  return id ? LIGHTHOUSE_BASE + encodeURIComponent(id) + '/' : '';
+}
+// Fabricate a believable 24-char Mongo ObjectId. The leading 4 bytes are the document
+// timestamp, so seeding from the meeting date makes the demo ids line up with real ones
+// (June-2026 rows start 0x6a…, matching the sample sheet).
+function makeEntityId(rng, dateMs) {
+  const ts = Math.floor((dateMs || Date.now()) / 1000).toString(16).padStart(8, '0').slice(-8);
+  let rest = '';
+  for (let i = 0; i < 16; i++) rest += Math.floor(rng() * 16).toString(16);
+  return ts + rest;
 }
 
-// Inline call-recording player: play/pause + scrubber + open-in-tab. `compact` = button only.
-function RecordingPlayer({ url, compact }) {
-  const ref = useRefA(null);
-  const [playing, setPlaying] = useStateA(false);
-  const [cur, setCur] = useStateA(0);
-  const [dur, setDur] = useStateA(0);
-  const [err, setErr] = useStateA(false);
-  const fmt = s => { if (!isFinite(s) || s < 0) return '0:00'; const m = Math.floor(s / 60); const ss = Math.floor(s % 60); return m + ':' + String(ss).padStart(2, '0'); };
-  if (!url) return compact ? null : <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No recording linked</span>;
+// ---- Call recordings ----
+// In LIVE data the recording URL comes straight from the Meeting Tracker sheet's
+// "Recording Link" column, surfaced as row.recordingUrl in getMeetingTracker (blank when
+// the call hasn't been linked yet — the inline player shows "No recording linked").
+// Here we seed a pool of real, streamable samples so the inline player is demonstrable.
+const DEMO_RECORDINGS = Array.from({ length: 16 }, (_, i) =>
+  `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-${i + 1}.mp3`);
 
-  const toggle = (e) => {
-    if (e) e.stopPropagation();
-    const a = ref.current; if (!a) return;
-    if (a.paused) { a.play().then(() => setPlaying(true)).catch(() => setErr(true)); }
-    else { a.pause(); setPlaying(false); }
-  };
-  const seek = (e) => {
-    e.stopPropagation();
-    const a = ref.current; if (!a || !dur) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    a.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * dur;
-  };
-
-  const playBtn = (
-    <button type="button" onClick={toggle} title={playing ? 'Pause recording' : 'Play recording'}
-      style={{
-        width: compact ? 30 : 34, height: compact ? 30 : 34, flex: '0 0 auto', borderRadius: '50%',
-        border: 'none', background: 'var(--primary)', color: '#fff', cursor: 'pointer',
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow-sm)',
-      }}>
-      {playing
-        ? <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="1.5" width="3" height="9" rx="1" /><rect x="7" y="1.5" width="3" height="9" rx="1" /></svg>
-        : <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3 1.8v8.4a.6.6 0 00.92.5l6.5-4.2a.6.6 0 000-1L3.92 1.3A.6.6 0 003 1.8z" /></svg>}
-    </button>
-  );
-  const audioEl = (
-    <audio ref={ref} src={url} preload="none"
-      onLoadedMetadata={e => setDur(e.target.duration)}
-      onTimeUpdate={e => setCur(e.target.currentTime)}
-      onEnded={() => { setPlaying(false); setCur(0); }}
-      onError={() => setErr(true)} />
-  );
-
-  if (compact) return <span style={{ display: 'inline-flex' }} onClick={e => e.stopPropagation()}>{playBtn}{audioEl}</span>;
-
-  const pct = dur ? (cur / dur) * 100 : 0;
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%' }}>
-      {playBtn}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div onClick={seek} style={{ height: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 99, overflow: 'hidden', cursor: 'pointer' }}>
-          <div style={{ width: pct + '%', height: '100%', background: 'var(--primary)', borderRadius: 99, transition: 'width 0.2s linear' }} />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 11, fontFamily: 'var(--font-mono)', color: err ? 'var(--bad)' : 'var(--ink-3)' }}>
-          <span>{err ? 'Recording unavailable' : (playing || cur ? fmt(cur) : 'Call recording')}</span>
-          <span>{fmt(dur)}</span>
-        </div>
-      </div>
-      <a href={url} target="_blank" rel="noopener noreferrer" title="Open recording in a new tab" onClick={e => e.stopPropagation()}
-        onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-2)'; }}
-        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-        style={{ flex: '0 0 auto', width: 30, height: 30, borderRadius: 8, border: '1px solid var(--line)', color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none', transition: 'background 0.15s' }}>
-        <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M8 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16h9a1.5 1.5 0 001.5-1.5V12" /><path d="M12 4h4v4 M16 4l-7 7" /></svg>
-      </a>
-      {audioEl}
-    </div>
-  );
+// The TEAM LEAD is the auditor: every meeting is audited by the TL of its LRM.
+// So a lead's assigned auditor = that LRM's Team Lead, and a TL's "queue" is simply
+// their own team's pending meetings. (QA_AUDITORS is retained only for legacy mock
+// audit attribution.)
+function auditorForLrm(emp) {
+  return { name: (emp && emp.tlName) || '—', email: (emp && emp.tlEmail) || '' };
 }
 
-// Approve / Reject toggle button used in the submit rail.
-function DecisionBtn({ active, tone, label, sym, onClick }) {
-  const t = window.TONE[tone];
-  return (
-    <button type="button" onClick={onClick} aria-pressed={active} style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-      height: 46, borderRadius: 'var(--radius-sm)', fontSize: 14, fontWeight: 700,
-      border: '1.5px solid ' + (active ? t.fg : 'var(--line)'),
-      background: active ? t.fg : 'var(--surface)', color: active ? '#fff' : 'var(--ink-2)',
-      boxShadow: active ? 'var(--shadow-sm)' : 'none', transition: 'all 0.15s',
-    }}>
-      <span style={{ width: 20, height: 20, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, background: active ? 'rgba(255,255,255,0.22)' : t.bg, color: active ? '#fff' : t.fg }}>{sym}</span>
-      {label}
-    </button>
-  );
+// ---- Deterministic PRNG so the demo is stable across reloads ----
+function makeRng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
 }
 
-function AgentCombo({ agents, value, onPick }) {
-  const [open, setOpen] = useStateA(false);
-  const [q, setQ] = useStateA(value || '');
-  const ref = useRefA(null);
-  React.useEffect(() => { setQ(value || ''); }, [value]);
-  React.useEffect(() => {
-    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
-  }, []);
-  // case-insensitive + whitespace-tolerant match (handles trailing spaces in the sheet)
-  const norm = s => String(s || '').trim().toLowerCase();
-  const matches = agents.filter(a => norm(a.name).includes(norm(q))).slice(0, 6);
-  const exactPick = v => agents.find(a => norm(a.name) === norm(v));
-  const showPanel = open && (matches.length > 0 || q.trim() !== '' || agents.length === 0);
-  return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      <TextInput value={q} placeholder="Start typing a name…" autoComplete="off"
-        onChange={v => { setQ(v); setOpen(true); const exact = exactPick(v); if (exact) onPick(exact); }}
-        onFocus={() => setOpen(true)} />
-      {showPanel && (
-        <div style={{
-          position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 40,
-          background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)',
-          boxShadow: 'var(--shadow-lg)', overflow: 'hidden', padding: 4,
-        }}>
-          {matches.map(a => (
-            <button key={a.email || a.name} type="button" onClick={() => { onPick(a); setQ(a.name); setOpen(false); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
-                padding: '8px 10px', border: 'none', background: 'transparent', borderRadius: 8 }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-              <Avatar name={a.name} size={28} />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>{a.name}</div>
-                <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{a.tlName} · {a.email}</div>
-              </div>
-            </button>
-          ))}
-          {matches.length === 0 && (
-            <div style={{ padding: '10px 12px', fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>
-              {agents.length === 0
-                ? 'No LRMs loaded. Add people to the EmployeeMaster sheet, then reload.'
-                : <>No LRM matches “<span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{q.trim()}</span>”. Check the spelling in EmployeeMaster.</>}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// Each agent has a latent skill profile (per-section bias) -> believable patterns.
+function buildMockAudits() {
+  const rng = makeRng(20260604);
+  const pick = arr => arr[Math.floor(rng() * arr.length)];
+  const audits = [];
+  let uid = 1;
 
-// LeadPicker — the TL's audit queue, shown directly (no typing needed to reveal it).
-// Defaults to the signed-in TL's assigned queue; "All pending" shows every un-audited
-// meeting. Each row carries a recording player + Lighthouse link. Selecting one
-// auto-fills LRM / Lead ID / dates downstream.
-function LeadPicker({ pending, auditorEmail, auditorName, role, tlAudited, onPick }) {
-  const { fmtDate } = window.QA;
-  const isQA = role === 'QA';
-  const [q, setQ] = useStateA('');
-  // QA reviews TL-audited leads first ('review'); 'all' lets them reach any scheduled lead.
-  const [tab, setTab] = useStateA(isQA ? 'review' : 'mine');
-  const [dateFilter, setDateFilter] = useStateA(''); // '' = all dates; otherwise a scheduleISO
-  const norm = s => String(s || '').trim().toLowerCase();
-  const mine = pending.filter(m => m.assignedAuditorEmail && norm(m.assignedAuditorEmail) === norm(auditorEmail));
-  // Leads a Team Lead has already audited — the QA Auditor's primary review queue.
-  const reviewable = (isQA && tlAudited) ? pending.filter(m => tlAudited.has(m.leadId)) : [];
-  const base = isQA
-    ? (tab === 'review' ? reviewable : pending)
-    : (tab === 'all' ? pending : mine);
-
-  // Distinct scheduled dates in the current queue (each with a count) — powers the date chips.
-  const dateOptions = (() => {
-    const map = new Map();
-    base.forEach(m => { const k = m.scheduleISO || ''; if (k) map.set(k, (map.get(k) || 0) + 1); });
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  })();
-  const shortDate = iso => {
-    const d = new Date(iso + 'T00:00:00');
-    return isNaN(d) ? iso : d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
-  };
-
-  const matches = base
-    .filter(m => !dateFilter || m.scheduleISO === dateFilter)
-    .filter(m => [m.leadId, m.lrmName, m.city].some(x => norm(x).includes(norm(q))))
-    .sort((a, b) => (a.scheduleISO || '').localeCompare(b.scheduleISO || ''));
-
-  const Tab = ({ id, label, n }) => {
-    const on = tab === id;
-    return (
-      <button type="button" onClick={() => setTab(id)} style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 99,
-        border: '1px solid ' + (on ? 'transparent' : 'var(--line)'), background: on ? 'var(--primary)' : 'var(--surface)',
-        color: on ? '#fff' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 600,
-      }}>{label}<span className="tnum" style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, opacity: 0.85 }}>{n}</span></button>
-    );
-  };
-
-  const DateChip = ({ active, label, n, onClick }) => (
-    <button type="button" onClick={onClick} style={{
-      flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 99,
-      border: '1px solid ' + (active ? 'var(--primary)' : 'var(--line)'), background: active ? 'var(--primary-soft)' : 'var(--surface)',
-      color: active ? 'var(--primary-strong)' : 'var(--ink-2)', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', cursor: 'pointer',
-    }}>{label}<span className="tnum" style={{ fontFamily: 'var(--font-mono)', fontSize: 11, opacity: 0.8 }}>{n}</span></button>
-  );
-
-  return (
-    <div>
-      <TextInput value={q} placeholder="Filter this queue — Lead ID, LRM or city…" autoComplete="off" onChange={setQ} />
-      <div style={{
-        marginTop: 10, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)',
-        overflow: 'hidden', background: 'var(--surface)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 10, borderBottom: '1px solid var(--line-soft)' }}>
-          {isQA
-            ? <>
-                <Tab id="review" label="Needs QA review" n={reviewable.length} />
-                <Tab id="all" label="All scheduled" n={pending.length} />
-              </>
-            : <>
-                <Tab id="mine" label="My queue" n={mine.length} />
-                <Tab id="all" label="All pending" n={pending.length} />
-              </>}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '9px 10px', borderBottom: '1px solid var(--line-soft)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-            <span style={{ flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)' }}>
-              <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="4.5" width="13" height="12" rx="2" /><path d="M3.5 8h13 M7 3v3 M13 3v3" /></svg>
-              Scheduled on
-            </span>
-            <input type="date" value={dateFilter} onChange={e => setDateFilter(e.target.value)}
-              style={{ height: 32, padding: '0 9px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 12.5, fontFamily: 'inherit' }} />
-            {dateFilter
-              ? <button type="button" onClick={() => setDateFilter('')} style={{ height: 32, padding: '0 11px', borderRadius: 99, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontSize: 12, fontWeight: 600 }}>Clear · show all dates</button>
-              : <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>Showing all scheduled dates</span>}
-          </div>
-          {dateOptions.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, overflowX: 'auto' }}>
-              <DateChip active={dateFilter === ''} label="All" n={base.length} onClick={() => setDateFilter('')} />
-              {dateOptions.map(([iso, n]) => (
-                <DateChip key={iso} active={dateFilter === iso} label={shortDate(iso)} n={n} onClick={() => setDateFilter(iso)} />
-              ))}
-            </div>
-          )}
-        </div>
-        <div style={{ maxHeight: 340, overflowY: 'auto', padding: 4 }}>
-          {matches.map(m => {
-            const assignedMe = norm(m.assignedAuditorEmail) === norm(auditorEmail);
-            return (
-              <div key={m.leadId} role="button" tabIndex={0}
-                onClick={() => onPick(m)}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(m); } }}
-                style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', padding: '8px 11px', borderRadius: 8, cursor: 'pointer' }}
-                onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                <span className="tnum" style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, fontWeight: 700, color: 'var(--primary-strong)' }}>{m.leadId}</span>
-                <span style={{ minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.lrmName}</span>
-                  <span style={{ display: 'block', fontSize: 11.5, color: 'var(--ink-3)' }}>{m.city} · {m.meetingType.replace(/_/g, ' ')} · {fmtDate(m.scheduleISO)}</span>
-                </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                  <RecordingPlayer url={m.recordingUrl} compact />
-                  <LighthouseLink href={m.leadLink} entityId={m.entityId} leadId={m.leadId} compact />
-                  {assignedMe
-                    ? <Badge tone="primary" style={{ fontSize: 10.5 }}>You</Badge>
-                    : <span style={{ fontSize: 11, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{m.assignedAuditorName ? m.assignedAuditorName.split(' ')[0] : ''}</span>}
-                </span>
-              </div>
-            );
-          })}
-          {matches.length === 0 && (
-            <div style={{ padding: '16px 12px', fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, textAlign: 'center' }}>
-              {isQA && tab === 'review'
-                ? (reviewable.length === 0
-                    ? <>No TL-audited leads are waiting for QA review. Switch to <span style={{ color: 'var(--primary-strong)', fontWeight: 600 }}>All scheduled</span> to audit any meeting.</>
-                    : 'No meetings match your filter.')
-                : tab === 'mine'
-                ? <>No pending meetings assigned to <b>{auditorName || 'you'}</b>. Try <span style={{ color: 'var(--primary-strong)', fontWeight: 600 }}>All pending</span>.</>
-                : (pending.length === 0 ? 'No pending meetings in the tracker — every scheduled meeting has been audited. 🎉' : 'No meetings match your filter.')}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AuditView({ agents, meetings = [], audits = [], onSubmit, threshold, session, busy }) {
-  const { SECTIONS, PARAMS, scoreAudit, normItem, fmtDate } = window.QA;
-  const blankAnswers = () => Object.fromEntries(PARAMS.map(p => [p.id, 'Yes']));
-
-  const [agent, setAgent] = useStateA(null);
-  const [agentName, setAgentName] = useStateA('');
-  const [meta, setMeta] = useStateA({ auditDate: '2026-06-08', meetingDate: '', leadId: '', entityId: '' });
-  const [answers, setAnswers] = useStateA(blankAnswers());
-  const [notes, setNotes] = useStateA({ strengths: '', improvements: '', actionItems: '' });
-  const [manualAuditor, setManualAuditor] = useStateA(() => { try { return localStorage.getItem('qa_auditor_email') || ''; } catch (e) { return ''; } });
-  const [selectedMeeting, setSelectedMeeting] = useStateA(null);
-  const [manualMode, setManualMode] = useStateA(false);
-  const [toast, setToast] = useStateA(null);
-  const [decision, setDecision] = useStateA('');  // TL's Approve / Reject on the meeting
-
-  // Auditor = the signed-in Google account when the deployment exposes it; otherwise a
-  // manually-entered email (persisted) so a blank login can never block an audit.
-  const detected = !!(session && session.email);
-  const auditorEmail = (detected ? session.email : manualAuditor).trim();
-  const auditorName = detected ? session.name : window.QA.nameFromEmail(auditorEmail);
-  // My role decides which queue I see and how this score is tagged. A QA Auditor re-audits
-  // across all teams; a Team Lead audits their own team. Role is derived from the auditor's
-  // email (QA list from /api/config, falling back to the demo list).
-  const myRole = (session && session.role) || window.QA.roleForEmail(auditorEmail);
-  const roleLabel = (window.QA.ROLE_LABEL && window.QA.ROLE_LABEL[myRole]) || 'Team Lead';
-
-  // pending = scheduled meetings THIS ROLE hasn't audited yet. Per-role on purpose: a lead a
-  // TL already scored still appears for the QA Auditor (and vice-versa), so both can
-  // independently audit the same lead.
-  const pending = useMemoA(() => {
-    const done = new Set(
-      audits.filter(a => (a.auditorRole || window.QA.roleForEmail(a.auditorEmail)) === myRole)
-            .map(a => a.leadId)
-    );
-    return meetings.filter(m => !done.has(m.leadId));
-  }, [meetings, audits, myRole]);
-  // Leads a TL has audited — the QA Auditor's primary "needs review" queue.
-  const tlAuditedLeads = useMemoA(() => new Set(
-    audits.filter(a => (a.auditorRole || window.QA.roleForEmail(a.auditorEmail)) === 'TL').map(a => a.leadId)
-  ), [audits]);
-  const myQueueCount = useMemoA(() =>
-    pending.filter(m => String(m.assignedAuditorEmail || '').toLowerCase() === auditorEmail.toLowerCase()).length,
-    [pending, auditorEmail]);
-
-  const { sectionPct, overall } = useMemoA(() => scoreAudit(answers), [answers]);
-  const pass = overall >= threshold;
-
-  const setAns = (id, v) => setAnswers(a => ({ ...a, [id]: v }));
-  const bulkSection = (sKey, v) => setAnswers(a => {
-    const next = { ...a };
-    SECTIONS.find(s => s.key === sKey).items.forEach((_, ii) => next[`${sKey}-${ii}`] = v);
-    return next;
+  const skill = AGENTS.map((_, i) => {
+    const base = 0.66 + rng() * 0.3; // 0.66 - 0.96
+    return SECTIONS.map((s, si) => {
+      // weakest section varies per agent
+      const dip = (si === (i % 5)) ? -0.18 : 0;
+      const dip2 = (s.key === 'objection') ? -0.06 : 0;
+      return Math.max(0.35, Math.min(0.99, base + dip + dip2 + (rng() - 0.5) * 0.12));
+    });
   });
 
-  const pickAgent = a => { setAgent(a); setAgentName(a.name); };
+  const today = new Date('2026-06-04');
 
-  // pick a scheduled meeting -> resolve the LRM from the directory and auto-fill everything
-  const pickLead = m => {
-    const a = agents.find(x => String(x.email).toLowerCase() === String(m.lrmEmail).toLowerCase())
-      || { name: m.lrmName, email: m.lrmEmail, tlEmail: '', mgrEmail: '', adosEmail: '' };
-    setSelectedMeeting(m);
-    setManualMode(false);
-    setDecision('');
-    setAgent(a); setAgentName(a.name);
-    setMeta(mm => ({ ...mm, leadId: m.leadId, entityId: m.entityId || '', meetingDate: m.scheduleISO || '' }));
-  };
-  const clearLead = () => {
-    setSelectedMeeting(null);
-    setDecision('');
-    setAgent(null); setAgentName('');
-    setMeta(mm => ({ ...mm, leadId: '', entityId: '', meetingDate: '' }));
+  const genAnswers = (skillRow) => {
+    const answers = {};
+    SECTIONS.forEach((s, si) => {
+      const p = skillRow[si];
+      s.items.forEach((_, ii) => {
+        const id = `${s.key}-${ii}`;
+        const r = rng();
+        if (r > 0.93 && s.items.length > 2) answers[id] = 'NA';
+        else answers[id] = rng() < p ? 'Yes' : 'No';
+      });
+    });
+    return answers;
   };
 
-  const reset = () => {
-    setAgent(null); setAgentName(''); setAnswers(blankAnswers());
-    setNotes({ strengths: '', improvements: '', actionItems: '' });
-    setMeta(m => ({ ...m, leadId: '', entityId: '', meetingDate: '' }));
-    setSelectedMeeting(null); setManualMode(false); setDecision('');
-  };
 
-  const submit = async () => {
-    if (!agent) { setToast({ type: 'bad', msg: 'Select an LRM before submitting.' }); return; }
-    if (!meta.leadId.trim()) { setToast({ type: 'bad', msg: 'Lead ID is required.' }); return; }
-    if (!auditorEmail) { setToast({ type: 'bad', msg: 'Enter your email under “Audited by” — your login could not be auto-detected.' }); return; }
-    if (!decision) { setToast({ type: 'bad', msg: 'Approve or reject the meeting before submitting.' }); return; }
-    const res = await onSubmit({ agentName: agent.name, leadId: meta.leadId.trim(), entityId: (meta.entityId || '').trim(), leadLink: (selectedMeeting && selectedMeeting.leadLink) || window.QA.lighthouseUrl((meta.entityId || '').trim()), auditDate: meta.auditDate, meetingDate: meta.meetingDate, auditorEmail, auditorName, auditorRole: myRole, meetingDecision: decision, answers: { ...answers }, notes: { ...notes } });
-    if (res && res.success === false) { setToast({ type: 'bad', msg: res.message || 'Could not save the audit.' }); return; }
-    const o = res && res.overall != null ? res.overall : overall;
-    setToast({ type: 'ok', msg: `${roleLabel} audit saved for ${agent.name} · ${o}% · meeting ${decision.toLowerCase()} · report dispatched to LRM, TL, ZSM & ADOS.` });
-    reset();
-    setTimeout(() => setToast(null), 5000);
-  };
+  AGENTS.forEach((agent, ai) => {
+    const n = 4 + Math.floor(rng() * 6); // 4-9 leads each
+    for (let k = 0; k < n; k++) {
+      const answers = genAnswers(skill[ai]);
+      const { sectionPct, overall } = scoreAudit(answers);
 
-  const prof = { name: agent?.name || '', email: agent?.email || '', tlEmail: agent?.tlEmail || '', mgrEmail: agent?.mgrEmail || '', adosEmail: agent?.adosEmail || '' };
+      const daysAgo = Math.floor(rng() * 75);
+      const d = new Date(today); d.setDate(d.getDate() - daysAgo);
+      const md = new Date(d); md.setDate(md.getDate() + 1 + Math.floor(rng() * 6));
 
-  return (
-    <div>
-      <ViewHeader title="New Audit"
-        sub="Score a sales call against the SolarSquare quality framework. Sections weight equally."
-        action={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 13px', borderRadius: 99, background: myRole === 'QA' ? 'var(--primary-soft)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: myRole === 'QA' ? 'var(--primary)' : 'var(--ok)' }} />
-          <span style={{ fontSize: 12, fontWeight: 700, color: myRole === 'QA' ? 'var(--primary-strong)' : 'var(--ink-2)' }}>Auditing as {roleLabel}</span>
-        </span>} />
+      // The TEAM LEAD of the LRM is the first-line auditor in our model.
+      const auditor = { name: agent.tlName, email: agent.tlEmail, role: 'TL' };
+      const mStatus = pick(['Scheduled', 'Completed', 'Completed', 'No-show', 'Rescheduled']);
+      const mAfter = overall >= 80
+        ? pick(['Confirmed', 'Completed', 'Confirmed', 'Rescheduled'])
+        : pick(['Rescheduled', 'Dropped', 'Confirmed', 'No-show']);
 
-      {toast && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, padding: '13px 18px',
-          borderRadius: 'var(--radius-sm)', fontSize: 14, fontWeight: 500,
-          color: toast.type === 'ok' ? 'var(--ok)' : 'var(--bad)',
-          background: toast.type === 'ok' ? 'var(--ok-soft)' : 'var(--bad-soft)',
-          border: `1px solid color-mix(in oklch, ${toast.type === 'ok' ? 'var(--ok)' : 'var(--bad)'} 22%, transparent)`,
-        }}>
-          <span style={{ fontSize: 16 }}>{toast.type === 'ok' ? '✓' : '!'}</span>{toast.msg}
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 320px', gap: 'var(--gap)', alignItems: 'start' }} className="audit-grid">
-        {/* LEFT: form */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)', minWidth: 0 }}>
-          <Card title="Audit profile"
-            subtitle={selectedMeeting ? null : (manualMode ? 'Manual entry — type the LRM and Lead ID yourself.' : 'Pick a scheduled meeting from the tracker — the rest fills in automatically.')}
-            action={selectedMeeting
-              ? <button type="button" onClick={clearLead} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--primary-strong)', background: 'none', border: 'none' }}>Change meeting</button>
-              : <button type="button" onClick={() => { setManualMode(m => !m); clearLead(); }} style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)', background: 'none', border: 'none', textDecoration: 'underline', textUnderlineOffset: 2 }}>{manualMode ? 'Use the meeting picker' : 'Enter manually instead'}</button>}>
-
-            {/* picker / selection banner */}
-            {!manualMode && (selectedMeeting ? (
-              <div style={{ marginBottom: 16, borderRadius: 'var(--radius-sm)', background: 'var(--primary-softer)', border: '1px solid var(--line-soft)', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px' }}>
-                  <span className="tnum" style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 700, color: 'var(--primary-strong)' }}>{selectedMeeting.leadId}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>{selectedMeeting.lrmName}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{selectedMeeting.city} · {selectedMeeting.meetingType.replace(/_/g, ' ')} · scheduled {fmtDate(selectedMeeting.scheduleISO)}</div>
-                  </div>
-                  {String(selectedMeeting.assignedAuditorEmail || '').toLowerCase() === auditorEmail.toLowerCase()
-                    ? <Badge tone="primary">Your team</Badge>
-                    : <Badge tone="neutral">Auditor: {selectedMeeting.assignedAuditorName || '—'}</Badge>}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderTop: '1px solid var(--line-soft)', flexWrap: 'wrap' }}>
-                  <LighthouseLink href={selectedMeeting.leadLink} entityId={selectedMeeting.entityId} leadId={selectedMeeting.leadId} />
-                  <EntityIdChip entityId={selectedMeeting.entityId} />
-                  <div style={{ flex: 1, minWidth: 220 }}><RecordingPlayer url={selectedMeeting.recordingUrl} /></div>
-                </div>
-              </div>
-            ) : (
-              <div style={{ marginBottom: 16 }}>
-                <Field label="Meeting to audit" hint={myQueueCount ? `${myQueueCount} in your queue` : `${pending.length} pending`}>
-                  <LeadPicker pending={pending} auditorEmail={auditorEmail} auditorName={auditorName} role={myRole} tlAudited={tlAuditedLeads} onPick={pickLead} />
-                </Field>
-              </div>
-            ))}
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }} className="profile-grid">
-              <Field label="LRM name" hint={manualMode ? 'autocomplete' : 'auto-filled'} span={1}>
-                {manualMode
-                  ? <AgentCombo agents={agents} value={agentName} onPick={pickAgent} />
-                  : <TextInput value={agentName} locked placeholder="select a meeting" />}
-              </Field>
-              <Field label="LRM email"><TextInput value={prof.email} locked placeholder="auto-filled" /></Field>
-              <Field label="Lead ID">
-                {manualMode
-                  ? <TextInput value={meta.leadId} onChange={v => setMeta(m => ({ ...m, leadId: v }))} placeholder="LMH000000" />
-                  : <TextInput value={meta.leadId} locked placeholder="from meeting" />}
-              </Field>
-              {manualMode && (
-                <Field label="Entity id" hint="for Lighthouse link" span={1}>
-                  <div>
-                    <TextInput value={meta.entityId} onChange={v => setMeta(m => ({ ...m, entityId: v }))} placeholder="24-char id from the tracker" />
-                    {meta.entityId.trim() && <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}><LighthouseLink entityId={meta.entityId.trim()} leadId={meta.leadId} /><EntityIdChip entityId={meta.entityId.trim()} /></div>}
-                  </div>
-                </Field>
-              )}
-              <Field label="City / Cluster"><TextInput value={selectedMeeting ? selectedMeeting.cluster : ''} locked placeholder="auto-filled" /></Field>
-              <Field label="Team Lead"><TextInput value={prof.tlEmail} locked placeholder="auto-filled" /></Field>
-              <Field label="ZSM"><TextInput value={prof.mgrEmail} locked placeholder="auto-filled" /></Field>
-              <Field label="ADOS"><TextInput value={prof.adosEmail} locked placeholder="auto-filled" /></Field>
-              <Field label="Audit date"><TextInput type="date" value={meta.auditDate} onChange={v => setMeta(m => ({ ...m, auditDate: v }))} /></Field>
-              <Field label="Meeting scheduled date"><TextInput type="date" value={meta.meetingDate} onChange={v => setMeta(m => ({ ...m, meetingDate: v }))} locked={!manualMode} /></Field>
-              <Field label="Audited by" hint={detected ? 'your login' : 'enter your email'}>
-                {detected
-                  ? <TextInput value={`${session.name} · ${session.email}`} locked />
-                  : <div>
-                      <TextInput type="email" value={manualAuditor} placeholder="you@solarsquare.in"
-                        onChange={v => { setManualAuditor(v); try { localStorage.setItem('qa_auditor_email', v); } catch (e) {} }} />
-                      <span style={{ display: 'block', marginTop: 5, fontSize: 11, color: 'var(--warn)', lineHeight: 1.4 }}>⚠ Login not auto-detected — type your email (saved for next time).</span>
-                    </div>}
-              </Field>
-            </div>
-          </Card>
-
-          {SECTIONS.map((s, si) => {
-            const pct = sectionPct[s.key];
-            const tone = scoreTone(pct, threshold);
-            return (
-              <Card key={s.key} pad={false}
-                title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ width: 22, height: 22, borderRadius: 7, background: 'var(--primary-soft)', color: 'var(--primary-strong)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-display)' }}>{si + 1}</span>
-                  {s.name}
-                </span>}
-                action={<div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <button type="button" onClick={() => bulkSection(s.key, 'Yes')} style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink-3)', background: 'none', border: 'none', textDecoration: 'underline', textUnderlineOffset: 2 }}>All yes</button>
-                  <Badge tone={pct == null ? 'neutral' : tone} mono>{pct == null ? 'N/A' : pct + '%'}</Badge>
-                </div>}>
-                <div>
-                  {s.items.map((item, ii) => {
-                    const it = normItem(item);
-                    const id = `${s.key}-${ii}`;
-                    return (
-                      <div key={id} style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
-                        padding: '12px var(--pad-card)', minHeight: 'var(--row-h)',
-                        borderBottom: ii < s.items.length - 1 ? '1px solid var(--line-soft)' : 'none',
-                      }}>
-                        <span style={{ minWidth: 0 }}>
-                          <span style={{ display: 'block', fontSize: 14, color: 'var(--ink)', lineHeight: 1.4 }}>{it.label}</span>
-                          {it.eg.map((e, ei) => (
-                            <span key={ei} style={{ display: 'block', fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic', lineHeight: 1.45, marginTop: 2 }}>({e})</span>
-                          ))}
-                        </span>
-                        <SegToggle value={answers[id]} onChange={v => setAns(id, v)} size="sm" />
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-            );
-          })}
-
-          <Card title="Qualitative notes" subtitle="Shared with the LRM and their TL in the dispatched report.">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <Field label="Strengths"><TextArea rows={2} value={notes.strengths} onChange={v => setNotes(n => ({ ...n, strengths: v }))} placeholder="What went well on this call…" /></Field>
-              <Field label="Areas to improve"><TextArea rows={2} value={notes.improvements} onChange={v => setNotes(n => ({ ...n, improvements: v }))} placeholder="What to work on…" /></Field>
-              <Field label="Action items"><TextArea rows={2} value={notes.actionItems} onChange={v => setNotes(n => ({ ...n, actionItems: v }))} placeholder="Concrete next steps…" /></Field>
-            </div>
-          </Card>
-        </div>
-
-        {/* RIGHT: sticky live score */}
-        <div style={{ position: 'sticky', top: 20, display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }} className="audit-rail">
-          <Card>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--ink-3)' }}>Live score</div>
-              <ScoreRing value={overall} size={132} stroke={12} threshold={threshold} />
-              <Badge tone={pass ? 'ok' : 'bad'} style={{ fontSize: 13, padding: '5px 14px' }}>{pass ? '✓ Passing' : '✕ Below threshold'} · {threshold}%</Badge>
-              <div style={{ width: '100%', height: 1, background: 'var(--line-soft)' }} />
-              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {SECTIONS.map(s => {
-                  const pct = sectionPct[s.key];
-                  const tone = pct == null ? 'neutral' : scoreTone(pct, threshold);
-                  return (
-                    <div key={s.key} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '2px 8px', alignItems: 'center' }}>
-                      <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{s.name}</span>
-                      <span className="tnum" style={{ fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-mono)', color: `var(--${tone === 'neutral' ? 'ink-3' : tone})` }}>{pct == null ? 'N/A' : pct + '%'}</span>
-                      <div style={{ gridColumn: '1 / -1', height: 5, background: 'var(--surface-2)', borderRadius: 99, overflow: 'hidden' }}>
-                        <div style={{ width: (pct || 0) + '%', height: '100%', background: `var(--${tone === 'neutral' ? 'ink-3' : tone})`, borderRadius: 99, transition: 'width 0.4s' }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </Card>
-          <Card>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--ink-3)' }}>Meeting decision</span>
-                {decision
-                  ? <Badge tone={decision === 'Approved' ? 'ok' : 'bad'}>{decision === 'Approved' ? '✓ Approved' : '✕ Rejected'}</Badge>
-                  : <span style={{ fontSize: 11, color: 'var(--warn)', fontWeight: 600 }}>Required</span>}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <DecisionBtn active={decision === 'Approved'} tone="ok" label="Approve" sym="✓" onClick={() => setDecision('Approved')} />
-                <DecisionBtn active={decision === 'Rejected'} tone="bad" label="Reject" sym="✕" onClick={() => setDecision('Rejected')} />
-              </div>
-              <p style={{ margin: 0, fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>Your call on whether this meeting proceeds — saved with the audit and sent to the LRM, TL, ZSM &amp; ADOS.</p>
-            </div>
-          </Card>
-          <Button onClick={submit} disabled={busy} style={{ width: '100%', justifyContent: 'center', height: 46, opacity: busy ? 0.5 : 1 }}>
-            {busy ? 'Saving…' : 'Submit audit & dispatch report'}
-          </Button>
-          <p style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', margin: 0, lineHeight: 1.5 }}>
-            On submit, a scored report is emailed to the LRM, their Team Lead, ZSM and ADOS.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
+      const rec = {
+        id: uid++,
+        agentName: agent.name, agentEmail: agent.email,
+        tlName: agent.tlName, tlEmail: agent.tlEmail,
+        mgrName: agent.mgrName, mgrEmail: agent.mgrEmail,
+        adosName: agent.adosName, adosEmail: agent.adosEmail,
+        meetingDate: md.toISOString().slice(0, 10),
+        leadId: 'LMH' + (150000 + Math.floor(rng() * 49999)),
+        meetingStatus: mStatus, meetingStatusAfterAudit: mAfter,
+        auditorName: auditor.name, auditorEmail: auditor.email, auditorRole: auditor.role || 'TL',
+        callDate: d.toISOString().slice(0, 10), ts: d.getTime(),
+        answers, sectionPct, overall,
+        notes: buildNotes(rng, sectionPct),
+      };
+      audits.push(rec);
+    }
+  });
+  // QA calibration overlay — a QA Auditor independently re-audits ~1 in 3 of the leads a TL
+  // already scored, producing the TL-vs-QA pairs the Calibration view compares. Answers are
+  // jittered so the two auditors realistically agree on most points and diverge on a few.
+  const tlAudits = audits.filter(a => a.auditorRole === 'TL');
+  tlAudits.forEach((base, i) => {
+    if (i % 3 !== 0) return;
+    const qa = QA_AUDITORS[((i / 3) | 0) % QA_AUDITORS.length];
+    const answers = { ...base.answers };
+    PARAMS.forEach((p, pi) => { if ((i + pi) % 7 === 0) answers[p.id] = (rng() < 0.5 ? 'Yes' : 'No'); });
+    const sc = scoreAudit(answers);
+    const d = new Date(base.ts); d.setDate(d.getDate() + 1 + Math.floor(rng() * 3));
+    audits.push({
+      ...base,
+      id: uid++,
+      auditorName: qa.name, auditorEmail: qa.email, auditorRole: 'QA',
+      callDate: d.toISOString().slice(0, 10), ts: d.getTime(),
+      answers, sectionPct: sc.sectionPct, overall: sc.overall,
+      notes: buildNotes(rng, sc.sectionPct),
+    });
+  });
+  audits.sort((a, b) => b.ts - a.ts);
+  return audits;
 }
 
-function ViewHeader({ title, sub, action }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, marginBottom: 22, flexWrap: 'wrap' }}>
-      <div>
-        <h1 style={{ fontSize: 26, color: 'var(--ink)', letterSpacing: '-0.02em' }}>{title}</h1>
-        {sub && <p style={{ margin: '6px 0 0', color: 'var(--ink-3)', fontSize: 14, maxWidth: 620, lineHeight: 1.5 }}>{sub}</p>}
-      </div>
-      {action}
-    </div>
-  );
+function buildNotes(rng, sectionPct) {
+  const weakest = SECTIONS.reduce((w, s) => (sectionPct[s.key] ?? 100) < (sectionPct[w.key] ?? 100) ? s : w, SECTIONS[0]);
+  const strengthBank = [
+    'Warm, confident greeting and clear self-introduction.',
+    'Strong value framing — tied solar savings to the customer\u2019s bill.',
+    'Handled the pricing question with full transparency.',
+    'Excellent rapport; customer was engaged throughout.',
+    'Logged the lead cleanly in CRM with correct tagging.',
+  ];
+  const improveBank = {
+    opening: 'Set the reference for the call earlier so the customer knows why we\u2019re calling.',
+    selling: 'Spend more time on the value proposition before moving to qualification.',
+    qualification: 'Missed confirming roof ownership and meter phase — capture these every time.',
+    objection: 'Address objections directly instead of deflecting to the site visit.',
+    closing: 'Confirm the appointment slot explicitly and repeat it back to the customer.',
+  };
+  const actionBank = {
+    opening: 'Practice the opening script; review 2 recorded calls with TL.',
+    selling: 'Shadow a top performer on value-prop delivery this week.',
+    qualification: 'Use the qualification checklist on the next 10 calls.',
+    objection: 'Attend the objection-handling refresher session.',
+    closing: 'Role-play closing & appointment confirmation in next 1:1.',
+  };
+  return {
+    strengths: strengthBank[Math.floor(rng() * strengthBank.length)],
+    improvements: improveBank[weakest.key],
+    actionItems: actionBank[weakest.key],
+  };
 }
 
-Object.assign(window, { AuditView, ViewHeader });
+// ---- Meeting Tracker ----
+// Mirrors the "meeting tracker" Google Sheet: one row per meeting scheduled.
+// Columns: lead_id, meeting_type, "Combined City, Cluster", meeting_schedule_date,
+//          assigned_lrm_email, assigned_lrm.
+// We seed it so it JOINS to the audits: every audited lead appears here (=> "Audits
+// Done"), plus extra un-audited meetings (=> "Pending"). City comes from the row;
+// TL is resolved from the LRM via the employee directory.
+function buildMeetingTracker(audits) {
+  const rng = makeRng(76543210);
+  const byEmail = {};
+  AGENTS.forEach(a => { byEmail[a.email] = a; });
+  const today = new Date('2026-06-08');
+  const fmtSched = (d, h) => {
+    const dd = new Date(d); dd.setHours(h, [0, 30][Math.floor(rng() * 2)], 0, 0);
+    return dd.toISOString();
+  };
+  const meetingTypes = ['fresh_meeting', 'fresh_meeting', 'fresh_meeting', 're_meeting'];
+  const rows = [];
+  let seq = 100000;
+
+  // 1) every audited lead -> a tracker row (these count as "Audits Done")
+  audits.forEach(a => {
+    const emp = byEmail[a.agentEmail] || {};
+    const geo = cityForTl(emp.tlEmail);
+    const au = auditorForLrm(emp);
+    const sched = a.meetingDate || a.callDate;
+    const entityId = makeEntityId(rng, Date.parse(sched + 'T00:00:00Z'));
+    rows.push({
+      leadId: a.leadId,
+      entityId, leadLink: lighthouseUrl(entityId),
+      meetingType: 'fresh_meeting',
+      city: geo.city, cluster: geo.cluster,
+      scheduleDate: sched,
+      lrmEmail: a.agentEmail, lrmName: a.agentName,
+      assignedAuditorEmail: au.email, assignedAuditorName: au.name,
+      recordingUrl: DEMO_RECORDINGS[Math.floor(rng() * DEMO_RECORDINGS.length)],
+    });
+  });
+
+  // 2) extra meetings with NO audit yet (these are the "Pending" backlog)
+  AGENTS.forEach(agent => {
+    const geo = cityForTl(agent.tlEmail);
+    const pend = 2 + Math.floor(rng() * 6); // 2-7 pending each
+    for (let k = 0; k < pend; k++) {
+      const daysAhead = Math.floor(rng() * 8) - 2; // mostly upcoming, some just-passed
+      const d = new Date(today); d.setDate(d.getDate() + daysAhead);
+      const leadId = 'LMH' + (seq++);
+      const au = auditorForLrm(agent);
+      const entityId = makeEntityId(rng, d.getTime());
+      // Recording Link can be blank in the sheet until the call is linked — mirror that.
+      const hasRec = rng() > 0.18;
+      rows.push({
+        leadId,
+        entityId, leadLink: lighthouseUrl(entityId),
+        meetingType: meetingTypes[Math.floor(rng() * meetingTypes.length)],
+        city: geo.city, cluster: geo.cluster,
+        scheduleDate: fmtSched(d, 8 + Math.floor(rng() * 9)),
+        lrmEmail: agent.email, lrmName: agent.name,
+        assignedAuditorEmail: au.email, assignedAuditorName: au.name,
+        recordingUrl: hasRec ? DEMO_RECORDINGS[Math.floor(rng() * DEMO_RECORDINGS.length)] : '',
+      });
+    }
+  });
+
+  // 3) Meeting outcome — did the scheduled meeting actually get DONE?
+  // Future-dated meetings are still 'Scheduled' (not yet due). Past meetings resolve to a
+  // held/missed outcome (~72% completed). In LIVE data this comes straight from the
+  // tracker's "Meeting Status" column; here we seed it deterministically.
+  const outcomeToday = '2026-06-08';
+  const outcomePool = ['Completed', 'Completed', 'Completed', 'Completed', 'Completed',
+    'Completed', 'Completed', 'No-show', 'Rescheduled', 'Cancelled'];
+  rows.forEach(r => {
+    const iso = (r.scheduleDate || '').slice(0, 10);
+    r.meetingStatus = iso > outcomeToday ? 'Scheduled' : outcomePool[Math.floor(rng() * outcomePool.length)];
+    // "Meeting Done Date" — stamped only when the meeting was actually held. Its presence is
+    // the real completion signal in production; here it mirrors a 'Completed' outcome.
+    r.meetingDoneDate = r.meetingStatus === 'Completed' ? iso : '';
+    r.meetingDoneISO = r.meetingDoneDate;
+  });
+
+  return rows;
+}
+
+// derive a display name from an email local-part: "laxshmi.iyer@x" -> "Laxshmi Iyer"
+function nameFromEmail(email) {
+  if (!email) return '';
+  return email.split('@')[0].split(/[._]+/).filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+}
+// Simulated signed-in session. Team Leads are the auditors, so the demo logs in as a TL —
+// their queue is their own team's pending meetings. (In LIVE Apps Script this is the
+// real Google account of whoever opens the app.)
+const SESSION = { email: 'vikram.nair@solarsquare.in', role: 'Team Lead' };
+SESSION.name = nameFromEmail(SESSION.email);
+
+const __MOCK_AUDITS = buildMockAudits();
+
+window.QA = {
+  SECTIONS, PARAMS, PASS_DEFAULT, scoreAudit, normItem, nameFromEmail, SESSION,
+  MANAGERS, TEAM_LEADS, AGENTS, QA_AUDITORS, ADOS_LIST,
+  ROLE_LABEL, roleForEmail, setQaAuditorEmails, getQaAuditorEmails,
+  CITY_BY_TL, cityForTl, lighthouseUrl, LIGHTHOUSE_BASE,
+  MOCK_AUDITS: __MOCK_AUDITS,
+  MEETING_TRACKER: buildMeetingTracker(__MOCK_AUDITS),
+  fmtDate: (iso) => {
+    if (!iso) return '\u2014';
+    const d = new Date(iso + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  },
+};
