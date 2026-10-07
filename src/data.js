@@ -130,7 +130,7 @@ function getQaAuditorEmails() { return QA_AUDITOR_EMAILS.slice(); }
 // sit in the org chart (or even if they sit in it at all). Everyone else is scoped below.
 const ADMIN_EMAILS = [
   'omprakash.p@solarsquare.in', 'manoj.jaiswal@solarsquare.in',
-  'analytics.sse@solarsquare.in', 'samapti.pal@solarsquare.in',
+  'analytics.sse@solarsquare.in', 'ankit.agrawal@solarsquare.in',
 ].map(s => s.toLowerCase());
 function isAdminEmail(email) { return ADMIN_EMAILS.indexOf(String(email || '').trim().toLowerCase()) >= 0; }
 
